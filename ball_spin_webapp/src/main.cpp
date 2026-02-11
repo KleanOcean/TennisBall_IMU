@@ -304,8 +304,9 @@ void loop() {
     }
 
     // Integrate quaternion from angular velocity
+    // Dead zone 0.05 rad/s (~3 deg/s) to reject MPU6886 gyro drift
     float wmag = sqrtf(gx * gx + gy * gy + gz * gz);
-    if (wmag > 0.01f) {
+    if (wmag > 0.05f) {
         float angle = wmag * dt;
         float ha    = angle * 0.5f;
         float sha   = sinf(ha);
