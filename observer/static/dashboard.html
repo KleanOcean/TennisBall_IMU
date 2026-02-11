@@ -3,157 +3,298 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>网球旋转观测器</title>
+<title>YoTB Dashboard</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{background:#1a1a2e;color:#e0e0e0;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;min-height:100vh;overflow-x:hidden}
+:root{
+  --bg:#0a0e27;
+  --surface:#111633;
+  --accent:#C8D820;
+  --text-primary:#FFFFFF;
+  --text-secondary:#667788;
+  --border:#1a2040;
+  --glow:rgba(200,216,32,0.3);
+  --ring:#222244;
+}
+body{background:var(--bg);color:var(--text-primary);font-family:system-ui,-apple-system,'Segoe UI',sans-serif;min-height:100vh;overflow-x:hidden}
 
-/* Header */
-.header{display:flex;justify-content:space-between;align-items:center;padding:12px 20px;background:#0f3460;border-bottom:2px solid #1a5276}
-.header h1{font-size:1.3rem;color:#C8D820;letter-spacing:1px}
-.session-info{display:flex;align-items:center;gap:10px;font-size:0.85rem}
-.session-info .status-dot{width:10px;height:10px;border-radius:50%;display:inline-block;transition:background 0.3s}
-.session-info .status-dot.active{background:#44FF44;box-shadow:0 0 6px #44FF44;animation:pulse 1.5s infinite}
-.session-info .status-dot.ended{background:#888}
+/* ====== Header ====== */
+.header{display:flex;align-items:center;padding:14px 24px;background:var(--surface);border-bottom:1px solid var(--border);gap:24px;position:sticky;top:0;z-index:50}
+.logo{font-size:1.5rem;font-weight:800;color:#fff;letter-spacing:2px;flex-shrink:0;user-select:none}
+.logo span{color:var(--accent)}
+.nav-tabs{display:flex;gap:0;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;flex:1}
+.nav-tabs::-webkit-scrollbar{display:none}
+.nav-tab{padding:10px 20px;font-size:0.82rem;font-weight:700;color:var(--text-secondary);cursor:pointer;border:none;background:none;letter-spacing:1.5px;white-space:nowrap;position:relative;transition:color 0.2s}
+.nav-tab:hover{color:#aabbcc}
+.nav-tab.active{color:var(--accent)}
+.nav-tab.active::after{content:'';position:absolute;bottom:0;left:20%;right:20%;height:2px;background:var(--accent);border-radius:1px}
+.session-indicator{display:flex;align-items:center;gap:8px;font-size:0.82rem;color:var(--text-secondary);flex-shrink:0;margin-left:auto}
+.status-dot{width:9px;height:9px;border-radius:50%;display:inline-block;transition:background 0.3s}
+.status-dot.active{background:#44FF44;box-shadow:0 0 6px #44FF44;animation:pulse 1.5s infinite}
+.status-dot.ended{background:#556677}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
 
-/* Main layout */
-.main{display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:16px;max-width:1400px;margin:0 auto}
-@media(max-width:900px){.main{grid-template-columns:1fr;padding:10px;gap:10px}}
+/* ====== Tab Content ====== */
+.tab-content{display:none;padding:20px;max-width:1440px;margin:0 auto}
+.tab-content.active{display:block}
 
-/* Cards */
-.card{background:#16213e;border-radius:12px;padding:16px;box-shadow:0 4px 12px rgba(0,0,0,0.3)}
-.card h2{font-size:0.95rem;color:#8ab4f8;margin-bottom:10px}
+/* ====== Cards ====== */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px;position:relative}
+.card-title{font-size:0.8rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:14px;font-weight:600}
 
-/* Stats cards grid */
-.stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px}
-.stat-box{background:#1a1a2e;border-radius:8px;padding:12px 14px;text-align:center}
-.stat-val{font-size:2rem;font-weight:700;color:#C8D820;font-family:'Courier New',monospace;line-height:1.1}
-.stat-lbl{font-size:0.75rem;color:#888;margin-top:4px}
+/* ====== DASHBOARD TAB ====== */
+.dashboard-grid{display:grid;grid-template-columns:25% 1fr 35%;gap:18px;align-items:start}
+@media(max-width:1100px){.dashboard-grid{grid-template-columns:1fr 1fr;}.dashboard-grid .col-center{order:-1;grid-column:1/-1}}
+@media(max-width:768px){.dashboard-grid{grid-template-columns:1fr;}.dashboard-grid .col-center{order:-1}}
 
-/* Polar plot area */
+/* -- RPM Gauge Column -- */
+.gauge-wrap{display:flex;flex-direction:column;align-items:center;padding:10px 0 0}
+#gaugeCanvas{max-width:100%;height:auto}
+.mini-stats{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:16px;width:100%}
+.mini-stat{background:var(--bg);border-radius:10px;padding:14px 10px;text-align:center;border:1px solid var(--border)}
+.mini-stat .val{font-size:1.6rem;font-weight:800;color:var(--accent);font-family:'Courier New',monospace;line-height:1.1}
+.mini-stat .lbl{font-size:0.7rem;color:var(--text-secondary);margin-top:5px}
+
+/* -- 3D Ball Column -- */
+.col-center{display:flex;flex-direction:column;align-items:center}
+.ball-glow-wrap{position:relative;display:flex;align-items:center;justify-content:center}
+.ball-glow{position:absolute;width:60%;height:60%;border-radius:50%;background:radial-gradient(circle,var(--glow) 0%,transparent 70%);filter:blur(30px);pointer-events:none}
+#ballCanvas{position:relative;z-index:1;max-width:100%;height:auto}
+.ball-label{margin-top:10px;font-size:0.75rem;color:var(--text-secondary);text-align:center;letter-spacing:1px}
+
+/* -- Polar Plot Column -- */
 .polar-container{display:flex;flex-direction:column;align-items:center}
 .polar-container svg{max-width:100%;height:auto}
+.legend{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px;justify-content:center}
+.legend-btn{display:flex;align-items:center;gap:5px;padding:4px 10px;border-radius:16px;border:1px solid var(--border);background:var(--bg);cursor:pointer;font-size:0.72rem;color:var(--text-primary);transition:opacity 0.2s}
+.legend-btn:hover{border-color:rgba(200,216,32,0.4)}
+.legend-btn.hidden{opacity:0.25}
+.legend-dot{width:9px;height:9px;border-radius:50%;display:inline-block}
 
-/* Legend / filter buttons */
-.legend{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;justify-content:center}
-.legend-btn{display:flex;align-items:center;gap:5px;padding:4px 10px;border-radius:16px;border:1px solid rgba(255,255,255,0.15);background:#1a1a2e;cursor:pointer;font-size:0.75rem;color:#e0e0e0;transition:opacity 0.2s}
-.legend-btn:hover{border-color:rgba(255,255,255,0.3)}
-.legend-btn.hidden{opacity:0.3}
-.legend-dot{width:10px;height:10px;border-radius:50%;display:inline-block}
-
-/* Spin distribution bar chart */
-.dist-bar-wrap{margin-top:8px}
-.dist-row{display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:0.8rem}
-.dist-label{width:60px;text-align:right;color:#8ab4f8;flex-shrink:0}
-.dist-bar-bg{flex:1;height:18px;background:#1a1a2e;border-radius:4px;overflow:hidden;position:relative}
+/* -- Spin Distribution Bar -- */
+.dist-bar-wrap{margin-top:14px}
+.dist-row{display:flex;align-items:center;gap:8px;margin-bottom:7px;font-size:0.78rem}
+.dist-label{width:55px;text-align:right;color:var(--text-secondary);flex-shrink:0;font-size:0.72rem}
+.dist-bar-bg{flex:1;height:16px;background:var(--bg);border-radius:4px;overflow:hidden;position:relative}
 .dist-bar-fill{height:100%;border-radius:4px;transition:width 0.4s ease}
-.dist-pct{width:40px;text-align:left;color:#999;font-family:'Courier New',monospace}
+.dist-pct{width:36px;text-align:left;color:var(--text-secondary);font-family:'Courier New',monospace;font-size:0.72rem}
 
-/* Timeline section */
-.timeline-section{grid-column:1/-1;padding:0}
-.timeline-scroll{overflow-x:auto;padding:8px 0}
-.timeline-bar{position:relative;height:80px;min-width:100%;background:#1a1a2e;border-radius:8px}
+/* -- Timeline -- */
+.timeline-section{margin-top:18px}
+.timeline-scroll{overflow-x:auto;padding:8px 0;scrollbar-width:thin;scrollbar-color:var(--border) transparent}
+.timeline-scroll::-webkit-scrollbar{height:6px}
+.timeline-scroll::-webkit-scrollbar-track{background:transparent}
+.timeline-scroll::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+.timeline-bar{position:relative;height:80px;min-width:100%;background:var(--bg);border-radius:8px;border:1px solid var(--border)}
 .shot-mark{position:absolute;bottom:0;width:40px;transform:translateX(-20px);cursor:pointer;text-align:center;transition:opacity 0.2s}
 .shot-mark:hover{opacity:0.8}
-.shot-mark.selected .shot-dot{border-color:#fff;box-shadow:0 0 8px rgba(255,255,255,0.5)}
-.shot-dot{width:12px;height:12px;border-radius:50%;margin:0 auto 2px;border:2px solid rgba(255,255,255,0.2);transition:all 0.2s}
-.shot-rpm{font-size:0.7rem;color:#e0e0e0;font-family:'Courier New',monospace}
-.shot-type-label{font-size:0.6rem;font-weight:600;margin-top:1px}
+.shot-mark.selected .shot-dot{border-color:var(--accent);box-shadow:0 0 8px var(--glow)}
+.shot-dot{width:12px;height:12px;border-radius:50%;margin:0 auto 2px;border:2px solid rgba(255,255,255,0.15);transition:all 0.2s}
+.shot-rpm{font-size:0.68rem;color:var(--text-primary);font-family:'Courier New',monospace}
+.shot-type-label{font-size:0.58rem;font-weight:600;margin-top:1px}
 
-/* Spin type colors for text */
+/* ====== SHOTS TAB ====== */
+.session-table{width:100%;border-collapse:collapse;font-size:0.82rem}
+.session-table th{text-align:left;padding:10px 14px;color:var(--accent);border-bottom:1px solid var(--border);font-weight:700;font-size:0.72rem;letter-spacing:1px;text-transform:uppercase}
+.session-table td{padding:10px 14px;border-bottom:1px solid rgba(255,255,255,0.03);cursor:pointer;transition:background 0.15s}
+.session-table tr.clickable:hover td{background:rgba(200,216,32,0.04)}
+.session-table tr.active-row td{background:rgba(200,216,32,0.08)}
+.status-badge{display:inline-block;padding:3px 10px;border-radius:10px;font-size:0.7rem;font-weight:700;letter-spacing:0.5px}
+.status-badge.recording{background:rgba(68,255,68,0.12);color:#44FF44}
+.status-badge.ended{background:rgba(102,119,136,0.15);color:var(--text-secondary)}
+.delete-btn{background:none;border:1px solid #c0392b;color:#c0392b;border-radius:6px;padding:3px 12px;font-size:0.72rem;cursor:pointer;transition:all 0.2s}
+.delete-btn:hover{background:#c0392b;color:#fff}
+.actions-bar{display:flex;gap:10px;margin-top:16px;flex-wrap:wrap}
+.btn{padding:9px 22px;border:none;border-radius:8px;font-size:0.82rem;cursor:pointer;font-weight:700;transition:opacity 0.2s,background 0.2s,transform 0.1s;letter-spacing:0.5px}
+.btn:active{transform:scale(0.97)}
+.btn-accent{background:var(--accent);color:var(--bg)}
+.btn-accent:hover{background:#d8e830}
+.btn-outline{background:none;border:1px solid var(--border);color:var(--text-primary)}
+.btn-outline:hover{border-color:var(--accent);color:var(--accent)}
+
+/* -- Shot detail table (Shots tab) -- */
+.shot-detail-table{width:100%;border-collapse:collapse;font-size:0.78rem;margin-top:18px}
+.shot-detail-table th{text-align:left;padding:8px 12px;color:var(--accent);border-bottom:1px solid var(--border);font-weight:700;font-size:0.7rem;letter-spacing:1px;text-transform:uppercase}
+.shot-detail-table td{padding:8px 12px;border-bottom:1px solid rgba(255,255,255,0.03);font-family:'Courier New',monospace;color:var(--text-secondary)}
+
+/* ====== ANALYSIS TAB ====== */
+.analysis-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+@media(max-width:768px){.analysis-grid{grid-template-columns:1fr}}
+.analysis-polar-wrap{display:flex;flex-direction:column;align-items:center}
+.analysis-polar-wrap svg{max-width:100%;height:auto}
+.stats-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin-bottom:18px}
+.stats-summary .mini-stat{background:var(--surface);border:1px solid var(--border)}
+
+/* ====== SETTINGS TAB ====== */
+.settings-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+@media(max-width:768px){.settings-grid{grid-template-columns:1fr}}
+.setting-group{margin-bottom:16px}
+.setting-label{font-size:0.72rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;font-weight:600}
+.setting-value{font-size:0.88rem;color:var(--text-primary);font-family:'Courier New',monospace;padding:10px 14px;background:var(--bg);border-radius:8px;border:1px solid var(--border);word-break:break-all}
+.setting-placeholder{font-size:0.82rem;color:var(--text-secondary);font-style:italic;padding:10px 14px;background:var(--bg);border-radius:8px;border:1px dashed var(--border)}
+
+/* ====== Spin type text colors ====== */
 .sc-TOPSPIN{color:#FF6B6B}.sc-BACKSPIN{color:#4ECDC4}
 .sc-SIDE_L,.sc-SIDE_R,.sc-SIDESPIN{color:#FFE66D}
 .sc-SLICE{color:#A8E6CF}.sc-FLAT{color:#888}.sc-MIXED{color:#DDA0DD}
 
-/* Session history table */
-.history-section{grid-column:1/-1}
-.session-table{width:100%;border-collapse:collapse;font-size:0.85rem}
-.session-table th{text-align:left;padding:8px 12px;color:#8ab4f8;border-bottom:1px solid #1a5276;font-weight:600}
-.session-table td{padding:8px 12px;border-bottom:1px solid rgba(255,255,255,0.05);cursor:pointer;transition:background 0.15s}
-.session-table tr.clickable:hover td{background:#1a1a2e}
-.session-table tr.active-row td{background:#0f3460}
-.session-table .status-badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:0.72rem;font-weight:600}
-.session-table .status-badge.recording{background:rgba(68,255,68,0.15);color:#44FF44}
-.session-table .status-badge.ended{background:rgba(136,136,136,0.15);color:#888}
-.delete-btn{background:none;border:1px solid #c0392b;color:#c0392b;border-radius:6px;padding:3px 10px;font-size:0.75rem;cursor:pointer;transition:all 0.2s}
-.delete-btn:hover{background:#c0392b;color:#fff}
+/* ====== Tooltip ====== */
+.tooltip{position:absolute;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px 14px;font-size:0.78rem;pointer-events:none;z-index:100;white-space:nowrap;box-shadow:0 8px 24px rgba(0,0,0,0.5);display:none}
+.tooltip .tt-rpm{font-size:1.15rem;font-weight:800;color:var(--accent);font-family:'Courier New',monospace}
+.tooltip .tt-type{font-weight:700;margin-top:3px}
+.tooltip .tt-time{color:var(--text-secondary);font-size:0.7rem;margin-top:3px}
 
-/* Action buttons */
-.actions{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
-.btn{padding:8px 20px;border:none;border-radius:8px;font-size:0.85rem;cursor:pointer;font-weight:600;transition:opacity 0.2s,background 0.2s}
-.btn:active{opacity:0.7}
-.btn-export{background:#2980b9;color:#fff}
-.btn-export:hover{background:#3498db}
-.btn-json{background:#27ae60;color:#fff}
-.btn-json:hover{background:#2ecc71}
+/* ====== No data ====== */
+.no-data{text-align:center;color:var(--text-secondary);padding:40px 0;font-size:0.85rem}
 
-/* Tooltip */
-.tooltip{position:absolute;background:#0f3460;border:1px solid #1a5276;border-radius:8px;padding:8px 12px;font-size:0.78rem;pointer-events:none;z-index:100;white-space:nowrap;box-shadow:0 4px 12px rgba(0,0,0,0.4);display:none}
-.tooltip .tt-rpm{font-size:1.1rem;font-weight:700;color:#C8D820;font-family:'Courier New',monospace}
-.tooltip .tt-type{font-weight:600;margin-top:2px}
-.tooltip .tt-time{color:#888;font-size:0.72rem;margin-top:2px}
-
-/* No data */
-.no-data{text-align:center;color:#555;padding:40px 0;font-size:0.9rem}
-
-/* Right column wrapper */
-.right-col{display:flex;flex-direction:column;gap:16px}
+/* ====== Responsive ====== */
+@media(max-width:768px){
+  .header{padding:10px 14px;gap:12px;flex-wrap:wrap}
+  .logo{font-size:1.2rem}
+  .nav-tab{padding:8px 14px;font-size:0.75rem}
+  .session-indicator{font-size:0.75rem}
+  .tab-content{padding:12px}
+  .card{padding:14px}
+  #ballCanvas{width:90vw !important;height:auto !important}
+  .settings-grid,.analysis-grid{grid-template-columns:1fr}
+}
 </style>
 </head>
 <body>
 
+<!-- ====== HEADER ====== -->
 <div class="header">
-    <h1>网球旋转观测器</h1>
-    <div class="session-info">
+    <div class="logo">Yo<span>TB</span></div>
+    <nav class="nav-tabs" id="navTabs">
+        <button class="nav-tab active" data-tab="dashboard">DASHBOARD</button>
+        <button class="nav-tab" data-tab="shots">SHOTS</button>
+        <button class="nav-tab" data-tab="analysis">ANALYSIS</button>
+        <button class="nav-tab" data-tab="settings">SETTINGS</button>
+    </nav>
+    <div class="session-indicator">
         <span class="status-dot ended" id="sessionDot"></span>
-        <span id="sessionText">未选择会话</span>
+        <span id="sessionText">Select Session</span>
     </div>
 </div>
 
-<div class="main">
-    <!-- Left column: Polar Plot -->
-    <div class="card">
-        <h2>旋转轴极坐标图</h2>
-        <div class="polar-container">
-            <svg id="polarSvg" viewBox="0 0 400 400" width="400" height="400"></svg>
-            <div class="legend" id="legend"></div>
-        </div>
-    </div>
-
-    <!-- Right column: Stats + Distribution -->
-    <div class="right-col">
-        <div class="card">
-            <h2>训练统计</h2>
-            <div class="stats-grid">
-                <div class="stat-box"><div class="stat-val" id="statTotal">0</div><div class="stat-lbl">击球数</div></div>
-                <div class="stat-box"><div class="stat-val" id="statAvgRPM">0</div><div class="stat-lbl">平均 RPM</div></div>
-                <div class="stat-box"><div class="stat-val" id="statMaxRPM">0</div><div class="stat-lbl">最高 RPM</div></div>
-                <div class="stat-box"><div class="stat-val" id="statMaxG">0</div><div class="stat-lbl">最大 G</div></div>
+<!-- ====== DASHBOARD TAB ====== -->
+<div class="tab-content active" id="tab-dashboard">
+    <div class="dashboard-grid">
+        <!-- LEFT: RPM Gauge + Stats -->
+        <div class="col-left">
+            <div class="card">
+                <div class="gauge-wrap">
+                    <canvas id="gaugeCanvas" width="280" height="200"></canvas>
+                </div>
+                <div class="mini-stats">
+                    <div class="mini-stat"><div class="val" id="statTotal">0</div><div class="lbl">击球数</div></div>
+                    <div class="mini-stat"><div class="val" id="statAvgRPM">0</div><div class="lbl">平均 RPM</div></div>
+                    <div class="mini-stat"><div class="val" id="statMaxRPM">0</div><div class="lbl">最高 RPM</div></div>
+                    <div class="mini-stat"><div class="val" id="statMaxG">0</div><div class="lbl">最大 G</div></div>
+                </div>
             </div>
         </div>
-        <div class="card">
-            <h2>旋转类型分布</h2>
-            <div class="dist-bar-wrap" id="distChart"></div>
+
+        <!-- CENTER: 3D Wireframe Tennis Ball -->
+        <div class="col-center">
+            <div class="card">
+                <div class="ball-glow-wrap">
+                    <div class="ball-glow"></div>
+                    <canvas id="ballCanvas" width="380" height="380"></canvas>
+                </div>
+                <div class="ball-label">3D SPIN VISUALIZATION</div>
+            </div>
         </div>
-        <div class="actions">
-            <button class="btn btn-export" id="btnExportCSV" onclick="exportCSV()">导出 CSV</button>
-            <button class="btn btn-json" id="btnExportJSON" onclick="exportJSON()">导出 JSON</button>
+
+        <!-- RIGHT: Polar Plot + Distribution -->
+        <div class="col-right">
+            <div class="card">
+                <div class="card-title">Spin Axis Plot</div>
+                <div class="polar-container">
+                    <svg id="polarSvg" viewBox="0 0 400 400" width="400" height="400"></svg>
+                    <div class="legend" id="legend"></div>
+                </div>
+                <div class="dist-bar-wrap" id="distChart"></div>
+            </div>
         </div>
     </div>
 
     <!-- Timeline -->
     <div class="card timeline-section">
-        <h2>击球时间线</h2>
+        <div class="card-title">Shot Timeline</div>
         <div class="timeline-scroll">
             <div class="timeline-bar" id="timelineBar"></div>
         </div>
     </div>
+</div>
 
-    <!-- Session History -->
-    <div class="card history-section">
-        <h2>历史会话</h2>
+<!-- ====== SHOTS TAB ====== -->
+<div class="tab-content" id="tab-shots">
+    <div class="card">
+        <div class="card-title">Session History</div>
         <div id="sessionTableWrap"></div>
+        <div class="actions-bar">
+            <button class="btn btn-accent" onclick="exportCSV()">Export CSV</button>
+            <button class="btn btn-outline" onclick="exportJSON()">Export JSON</button>
+        </div>
+    </div>
+    <div class="card" style="margin-top:18px">
+        <div class="card-title">Shot Details</div>
+        <div id="shotDetailWrap"><div class="no-data">Select a session to view shot details</div></div>
+    </div>
+</div>
+
+<!-- ====== ANALYSIS TAB ====== -->
+<div class="tab-content" id="tab-analysis">
+    <div class="stats-summary" id="analysisSummary"></div>
+    <div class="analysis-grid">
+        <div class="card">
+            <div class="card-title">Spin Axis Distribution</div>
+            <div class="analysis-polar-wrap">
+                <svg id="analysisPolarSvg" viewBox="0 0 500 500" width="500" height="500"></svg>
+                <div class="legend" id="analysisLegend"></div>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-title">Spin Type Breakdown</div>
+            <div class="dist-bar-wrap" id="analysisDistChart"></div>
+            <div style="margin-top:20px">
+                <div class="card-title">Shot-by-Shot Data</div>
+                <div style="max-height:400px;overflow-y:auto" id="analysisShotTable"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ====== SETTINGS TAB ====== -->
+<div class="tab-content" id="tab-settings">
+    <div class="settings-grid">
+        <div class="card">
+            <div class="card-title">Connection</div>
+            <div class="setting-group">
+                <div class="setting-label">Dashboard URL</div>
+                <div class="setting-value" id="settingURL">-</div>
+            </div>
+            <div class="setting-group">
+                <div class="setting-label">API Base</div>
+                <div class="setting-value" id="settingAPI">/api/sessions</div>
+            </div>
+            <div class="setting-group">
+                <div class="setting-label">Active Session</div>
+                <div class="setting-value" id="settingSession">None</div>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-title">Preferences</div>
+            <div class="setting-group">
+                <div class="setting-label">Session Notes</div>
+                <div class="setting-placeholder">Session notes editing coming soon...</div>
+            </div>
+            <div class="setting-group">
+                <div class="setting-label">Theme</div>
+                <div class="setting-placeholder">Theme toggle coming soon...</div>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -196,6 +337,9 @@ const SPIN_LABELS = {
 const CX = 200, CY = 200, MAX_R = 170;
 const RPM_RINGS = [50, 100, 150, 200];
 
+// Analysis polar plot constants (larger)
+const ACX = 250, ACY = 250, AMAX_R = 210;
+
 let allSessions = [];
 let currentSessionId = null;
 let currentSession = null;
@@ -203,6 +347,53 @@ let currentShots = [];
 let pollTimer = null;
 let hiddenTypes = new Set();
 let selectedShotIdx = -1;
+
+// Ball rotation state
+let ballRotY = 0;
+let ballRotX = 0.3;
+let ballAnimFrame = null;
+
+// ============================================================
+// Tab Switching
+// ============================================================
+
+function initTabs() {
+    const tabs = document.querySelectorAll('.nav-tab');
+    const savedTab = sessionStorage.getItem('yotb-active-tab');
+
+    tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            const target = tab.dataset.tab;
+            switchTab(target);
+        });
+    });
+
+    if (savedTab && document.getElementById('tab-' + savedTab)) {
+        switchTab(savedTab);
+    }
+}
+
+function switchTab(name) {
+    document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+
+    const tab = document.querySelector('.nav-tab[data-tab="' + name + '"]');
+    const content = document.getElementById('tab-' + name);
+    if (tab) tab.classList.add('active');
+    if (content) content.classList.add('active');
+
+    sessionStorage.setItem('yotb-active-tab', name);
+
+    // Re-render tab-specific content
+    if (name === 'analysis') {
+        renderAnalysisTab();
+    } else if (name === 'shots') {
+        renderSessionTable();
+        renderShotDetail();
+    } else if (name === 'settings') {
+        updateSettings();
+    }
+}
 
 // ============================================================
 // SVG Namespace helper
@@ -216,57 +407,258 @@ function svgEl(tag, attrs) {
 }
 
 // ============================================================
-// Initialize Polar Plot static elements
+// RPM Gauge (Canvas)
+// ============================================================
+
+function drawGauge(avgRPM, maxRPM) {
+    const canvas = document.getElementById('gaugeCanvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    const cx = w / 2;
+    const cy = h * 0.78;
+    const radius = Math.min(w, h) * 0.42;
+    const startAngle = 0.75 * Math.PI;
+    const endAngle = 2.25 * Math.PI;
+    const totalSweep = endAngle - startAngle;
+
+    // Track arc
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, startAngle, endAngle, false);
+    ctx.strokeStyle = '#222244';
+    ctx.lineWidth = 14;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+
+    // Fill arc (proportion of avgRPM relative to gaugeMax)
+    const gaugeMax = Math.max(maxRPM, 200, avgRPM * 1.5);
+    const fillRatio = Math.min(avgRPM / gaugeMax, 1);
+    if (fillRatio > 0) {
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, startAngle, startAngle + totalSweep * fillRatio, false);
+        ctx.strokeStyle = '#C8D820';
+        ctx.lineWidth = 14;
+        ctx.lineCap = 'round';
+        ctx.stroke();
+
+        // Glow effect
+        ctx.shadowColor = 'rgba(200,216,32,0.5)';
+        ctx.shadowBlur = 15;
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, startAngle, startAngle + totalSweep * fillRatio, false);
+        ctx.strokeStyle = 'rgba(200,216,32,0.3)';
+        ctx.lineWidth = 14;
+        ctx.lineCap = 'round';
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        ctx.shadowColor = 'transparent';
+    }
+
+    // Center RPM text
+    ctx.fillStyle = '#C8D820';
+    ctx.font = 'bold ' + Math.round(radius * 0.65) + 'px "Courier New", monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(Math.round(avgRPM), cx, cy - 10);
+
+    // Labels
+    ctx.fillStyle = '#667788';
+    ctx.font = '600 ' + Math.round(radius * 0.2) + 'px system-ui, sans-serif';
+    ctx.fillText('RPM', cx, cy + radius * 0.3);
+    ctx.font = Math.round(radius * 0.16) + 'px system-ui, sans-serif';
+    ctx.fillText('AVG', cx, cy + radius * 0.5);
+}
+
+// ============================================================
+// 3D Wireframe Tennis Ball (Canvas)
+// ============================================================
+
+function initBall() {
+    if (ballAnimFrame) cancelAnimationFrame(ballAnimFrame);
+    animateBall();
+}
+
+function animateBall() {
+    ballRotY += 0.008;
+    drawBall();
+    ballAnimFrame = requestAnimationFrame(animateBall);
+}
+
+function drawBall() {
+    const canvas = document.getElementById('ballCanvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    const cx = w / 2, cy = h / 2;
+    const R = Math.min(w, h) * 0.38;
+
+    // Rotation matrices
+    const cosY = Math.cos(ballRotY), sinY = Math.sin(ballRotY);
+    const cosX = Math.cos(ballRotX), sinX = Math.sin(ballRotX);
+
+    function rotate(x, y, z) {
+        // Rotate around Y axis
+        let x1 = x * cosY + z * sinY;
+        let z1 = -x * sinY + z * cosY;
+        // Rotate around X axis
+        let y1 = y * cosX - z1 * sinX;
+        let z2 = y * sinX + z1 * cosX;
+        return { x: x1, y: y1, z: z2 };
+    }
+
+    function project(p) {
+        return { sx: cx + p.x, sy: cy - p.y, depth: p.z / R };
+    }
+
+    // Draw longitude lines
+    for (let phiDeg = 0; phiDeg < 360; phiDeg += 30) {
+        const phi = phiDeg * Math.PI / 180;
+        const points = [];
+        for (let thetaDeg = 0; thetaDeg <= 180; thetaDeg += 6) {
+            const theta = thetaDeg * Math.PI / 180;
+            const x = R * Math.sin(theta) * Math.cos(phi);
+            const y = R * Math.sin(theta) * Math.sin(phi);
+            const z = R * Math.cos(theta);
+            const rotated = rotate(x, y, z);
+            const proj = project(rotated);
+            points.push(proj);
+        }
+        drawLineStrip(ctx, points, 1);
+    }
+
+    // Draw latitude lines
+    for (let thetaDeg = 30; thetaDeg <= 150; thetaDeg += 30) {
+        const theta = thetaDeg * Math.PI / 180;
+        const points = [];
+        for (let phiDeg = 0; phiDeg <= 360; phiDeg += 6) {
+            const phi = phiDeg * Math.PI / 180;
+            const x = R * Math.sin(theta) * Math.cos(phi);
+            const y = R * Math.sin(theta) * Math.sin(phi);
+            const z = R * Math.cos(theta);
+            const rotated = rotate(x, y, z);
+            const proj = project(rotated);
+            points.push(proj);
+        }
+        drawLineStrip(ctx, points, 1);
+    }
+
+    // Tennis ball seam curve
+    const seamPoints = [];
+    for (let i = 0; i <= 72; i++) {
+        const t = (i / 72) * 2 * Math.PI;
+        const lat = 0.44 * Math.sin(2 * t);
+        const lon = t;
+        // Convert to Cartesian
+        const x = R * Math.cos(lat) * Math.cos(lon);
+        const y = R * Math.cos(lat) * Math.sin(lon);
+        const z = R * Math.sin(lat);
+        const rotated = rotate(x, y, z);
+        const proj = project(rotated);
+        seamPoints.push(proj);
+    }
+    drawLineStrip(ctx, seamPoints, 2.5, true);
+}
+
+function drawLineStrip(ctx, points, lineWidth, isSeam) {
+    if (points.length < 2) return;
+    for (let i = 0; i < points.length - 1; i++) {
+        const p1 = points[i], p2 = points[i + 1];
+        const avgDepth = (p1.depth + p2.depth) / 2;
+        const alpha = 0.12 + 0.88 * Math.max(0, avgDepth);
+
+        ctx.beginPath();
+        ctx.moveTo(p1.sx, p1.sy);
+        ctx.lineTo(p2.sx, p2.sy);
+
+        if (isSeam) {
+            ctx.strokeStyle = 'rgba(200,216,32,' + (alpha * 1.0).toFixed(3) + ')';
+            ctx.lineWidth = lineWidth;
+            // Glow on front-facing seam
+            if (avgDepth > 0.2) {
+                ctx.shadowColor = 'rgba(200,216,32,0.5)';
+                ctx.shadowBlur = 6;
+            } else {
+                ctx.shadowBlur = 0;
+                ctx.shadowColor = 'transparent';
+            }
+        } else {
+            ctx.strokeStyle = 'rgba(200,216,32,' + (alpha * 0.45).toFixed(3) + ')';
+            ctx.lineWidth = lineWidth;
+            ctx.shadowBlur = 0;
+            ctx.shadowColor = 'transparent';
+        }
+        ctx.stroke();
+    }
+    ctx.shadowBlur = 0;
+    ctx.shadowColor = 'transparent';
+}
+
+// ============================================================
+// Initialize Polar Plot (Dashboard version)
 // ============================================================
 
 function initPolarPlot() {
-    const svg = document.getElementById('polarSvg');
+    buildPolarSvg('polarSvg', CX, CY, MAX_R, RPM_RINGS);
+}
+
+function buildPolarSvg(svgId, cx, cy, maxR, rings) {
+    const svg = document.getElementById(svgId);
+    if (!svg) return;
     svg.innerHTML = '';
 
     // Background
-    svg.appendChild(svgEl('rect', {x:0, y:0, width:400, height:400, fill:'#1a1a2e', rx:8}));
+    svg.appendChild(svgEl('rect', {
+        x: 0, y: 0,
+        width: parseInt(svg.getAttribute('viewBox').split(' ')[2]),
+        height: parseInt(svg.getAttribute('viewBox').split(' ')[3]),
+        fill: '#0a0e27', rx: 12
+    }));
 
     // Concentric RPM rings
-    const maxRPMRing = RPM_RINGS[RPM_RINGS.length - 1];
-    RPM_RINGS.forEach(rpm => {
-        const r = (rpm / maxRPMRing) * MAX_R;
+    const maxRPMRing = rings[rings.length - 1];
+    rings.forEach(rpm => {
+        const r = (rpm / maxRPMRing) * maxR;
         svg.appendChild(svgEl('circle', {
-            cx: CX, cy: CY, r: r,
-            fill: 'none', stroke: '#333', 'stroke-width': 1,
+            cx: cx, cy: cy, r: r,
+            fill: 'none', stroke: '#222244', 'stroke-width': 1,
             'stroke-dasharray': '4,4'
         }));
         // RPM label
         const label = svgEl('text', {
-            x: CX + 4, y: CY - r - 2,
-            fill: '#555', 'font-size': '10', 'font-family': 'Courier New, monospace'
+            x: cx + 4, y: cy - r - 3,
+            fill: '#667788', 'font-size': '10', 'font-family': 'Courier New, monospace'
         });
         label.textContent = rpm;
         svg.appendChild(label);
     });
 
     // Cross-hair lines
-    svg.appendChild(svgEl('line', {x1: CX - MAX_R - 10, y1: CY, x2: CX + MAX_R + 10, y2: CY, stroke: '#333', 'stroke-width': 0.8}));
-    svg.appendChild(svgEl('line', {x1: CX, y1: CY - MAX_R - 10, x2: CX, y2: CY + MAX_R + 10, stroke: '#333', 'stroke-width': 0.8}));
+    svg.appendChild(svgEl('line', {x1: cx - maxR - 10, y1: cy, x2: cx + maxR + 10, y2: cy, stroke: '#222244', 'stroke-width': 0.8}));
+    svg.appendChild(svgEl('line', {x1: cx, y1: cy - maxR - 10, x2: cx, y2: cy + maxR + 10, stroke: '#222244', 'stroke-width': 0.8}));
 
     // Axis labels
     const labels = [
-        {text: '右侧旋', x: CX + MAX_R + 14, y: CY + 4, anchor: 'start'},   // 0 degrees
-        {text: '上旋',   x: CX, y: CY - MAX_R - 14, anchor: 'middle'},        // 90 degrees
-        {text: '左侧旋', x: CX - MAX_R - 14, y: CY + 4, anchor: 'end'},      // 180 degrees
-        {text: '下旋',   x: CX, y: CY + MAX_R + 22, anchor: 'middle'}         // 270 degrees
+        {text: '右侧旋', x: cx + maxR + 14, y: cy + 4, anchor: 'start'},
+        {text: '上旋',   x: cx, y: cy - maxR - 14, anchor: 'middle'},
+        {text: '左侧旋', x: cx - maxR - 14, y: cy + 4, anchor: 'end'},
+        {text: '下旋',   x: cx, y: cy + maxR + 22, anchor: 'middle'}
     ];
     labels.forEach(l => {
         const t = svgEl('text', {
             x: l.x, y: l.y,
-            fill: '#8ab4f8', 'font-size': '12', 'font-weight': '600',
+            fill: '#667788', 'font-size': '11', 'font-weight': '600',
             'text-anchor': l.anchor, 'font-family': 'system-ui, sans-serif'
         });
         t.textContent = l.text;
         svg.appendChild(t);
     });
 
-    // Group for shot points (added on top)
-    svg.appendChild(svgEl('g', {id: 'shotPoints'}));
+    // Group for shot points
+    svg.appendChild(svgEl('g', {id: svgId + '-shots'}));
 }
 
 // ============================================================
@@ -274,10 +666,15 @@ function initPolarPlot() {
 // ============================================================
 
 function renderPolarShots() {
-    const svg = document.getElementById('polarSvg');
-    let group = document.getElementById('shotPoints');
+    renderPolarShotsOn('polarSvg', CX, CY, MAX_R, 'polarSvg-shots');
+}
+
+function renderPolarShotsOn(svgId, cx, cy, maxR, groupId) {
+    const svg = document.getElementById(svgId);
+    if (!svg) return;
+    let group = document.getElementById(groupId);
     if (!group) {
-        group = svgEl('g', {id: 'shotPoints'});
+        group = svgEl('g', {id: groupId});
         svg.appendChild(group);
     }
     group.innerHTML = '';
@@ -298,14 +695,11 @@ function renderPolarShots() {
         const phi = shot.spin_axis_phi;
         if (phi == null) return;
 
-        // phi: 0=right, 90=top, counterclockwise
-        // SVG: 0=right, positive angle goes clockwise, so we negate
         const angleRad = phi * Math.PI / 180;
-        const rPx = (shot.rpm / scaleRPM) * MAX_R;
+        const rPx = (shot.rpm / scaleRPM) * maxR;
 
-        // In SVG, Y is inverted (positive goes down)
-        const px = CX + rPx * Math.cos(angleRad);
-        const py = CY - rPx * Math.sin(angleRad);
+        const px = cx + rPx * Math.cos(angleRad);
+        const py = cy - rPx * Math.sin(angleRad);
 
         const color = SPIN_COLORS[type] || '#888';
         const isLatest = (idx === lastIdx);
@@ -324,7 +718,6 @@ function renderPolarShots() {
             'data-idx': idx
         });
 
-        // Hover tooltip
         circle.addEventListener('mouseenter', (e) => showTooltip(e, shot));
         circle.addEventListener('mouseleave', hideTooltip);
         circle.addEventListener('click', () => selectShot(idx));
@@ -346,10 +739,8 @@ function showTooltip(e, shot) {
     tip.querySelector('.tt-time').textContent = shot.local_ts || '';
     tip.style.display = 'block';
 
-    const rect = document.body.getBoundingClientRect();
     let tx = e.pageX + 12;
     let ty = e.pageY - 10;
-    // Keep within viewport
     if (tx + 160 > window.innerWidth) tx = e.pageX - 170;
     if (ty < 0) ty = 10;
     tip.style.left = tx + 'px';
@@ -365,7 +756,12 @@ function hideTooltip() {
 // ============================================================
 
 function renderLegend() {
-    const el = document.getElementById('legend');
+    renderLegendInto('legend');
+}
+
+function renderLegendInto(elId) {
+    const el = document.getElementById(elId);
+    if (!el) return;
     el.innerHTML = '';
     const types = ['TOPSPIN', 'BACKSPIN', 'SIDE_L', 'SIDE_R', 'SLICE', 'FLAT', 'MIXED'];
     types.forEach(t => {
@@ -376,7 +772,9 @@ function renderLegend() {
             if (hiddenTypes.has(t)) hiddenTypes.delete(t);
             else hiddenTypes.add(t);
             renderLegend();
+            renderLegendInto('analysisLegend');
             renderPolarShots();
+            renderAnalysisPolar();
         });
         el.appendChild(btn);
     });
@@ -386,31 +784,31 @@ function renderLegend() {
 // Stats
 // ============================================================
 
-function updateStats() {
-    const totalEl = document.getElementById('statTotal');
-    const avgEl = document.getElementById('statAvgRPM');
-    const maxEl = document.getElementById('statMaxRPM');
-    const maxGEl = document.getElementById('statMaxG');
-
-    if (!currentShots.length) {
-        totalEl.textContent = '0';
-        avgEl.textContent = '0';
-        maxEl.textContent = '0';
-        maxGEl.textContent = '0';
-        return;
-    }
-
+function computeStats() {
     let sumRPM = 0, mxRPM = 0, mxG = 0;
     currentShots.forEach(s => {
         sumRPM += (s.rpm || 0);
         if (s.rpm > mxRPM) mxRPM = s.rpm;
         if (s.peak_g > mxG) mxG = s.peak_g;
     });
+    return {
+        total: currentShots.length,
+        avgRPM: currentShots.length ? Math.round(sumRPM / currentShots.length) : 0,
+        maxRPM: Math.round(mxRPM),
+        maxG: mxG
+    };
+}
 
-    totalEl.textContent = currentShots.length;
-    avgEl.textContent = Math.round(sumRPM / currentShots.length);
-    maxEl.textContent = Math.round(mxRPM);
-    maxGEl.textContent = mxG.toFixed(1);
+function updateStats() {
+    const stats = computeStats();
+
+    document.getElementById('statTotal').textContent = stats.total;
+    document.getElementById('statAvgRPM').textContent = stats.avgRPM;
+    document.getElementById('statMaxRPM').textContent = stats.maxRPM;
+    document.getElementById('statMaxG').textContent = stats.maxG.toFixed(1);
+
+    // Update RPM gauge
+    drawGauge(stats.avgRPM, stats.maxRPM);
 }
 
 // ============================================================
@@ -418,7 +816,12 @@ function updateStats() {
 // ============================================================
 
 function updateDistribution() {
-    const wrap = document.getElementById('distChart');
+    renderDistInto('distChart');
+}
+
+function renderDistInto(elId) {
+    const wrap = document.getElementById(elId);
+    if (!wrap) return;
     wrap.innerHTML = '';
 
     if (!currentShots.length) {
@@ -426,14 +829,12 @@ function updateDistribution() {
         return;
     }
 
-    // Count types
     const counts = {};
     currentShots.forEach(s => {
         const t = s.spin_type || 'MIXED';
         counts[t] = (counts[t] || 0) + 1;
     });
 
-    // Sort by count descending
     const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
     const total = currentShots.length;
 
@@ -455,6 +856,7 @@ function updateDistribution() {
 
 function renderTimeline() {
     const bar = document.getElementById('timelineBar');
+    if (!bar) return;
     bar.innerHTML = '';
 
     if (!currentShots.length) {
@@ -476,13 +878,19 @@ function renderTimeline() {
         const type = s.spin_type || 'MIXED';
         const color = SPIN_COLORS[type] || '#888';
 
+        // Scale dot by RPM
+        let dataMaxRPM = 0;
+        currentShots.forEach(sh => { if (sh.rpm > dataMaxRPM) dataMaxRPM = sh.rpm; });
+        const dotScale = dataMaxRPM > 0 ? 0.6 + 0.4 * (s.rpm / dataMaxRPM) : 1;
+        const dotSize = Math.round(8 + dotScale * 8);
+
         const mk = document.createElement('div');
         mk.className = 'shot-mark' + (i === selectedShotIdx ? ' selected' : '');
         mk.style.left = x + 'px';
         mk.addEventListener('click', () => selectShot(i));
 
         mk.innerHTML =
-            '<div class="shot-dot" style="background:' + color + '"></div>' +
+            '<div class="shot-dot" style="background:' + color + ';width:' + dotSize + 'px;height:' + dotSize + 'px"></div>' +
             '<div class="shot-rpm">' + Math.round(s.rpm) + '</div>' +
             '<div class="shot-type-label sc-' + type + '">' + (SPIN_LABELS[type] || type) + '</div>';
 
@@ -497,11 +905,12 @@ function selectShot(idx) {
 }
 
 // ============================================================
-// Session History Table
+// Session History Table (Shots tab)
 // ============================================================
 
 function renderSessionTable() {
     const wrap = document.getElementById('sessionTableWrap');
+    if (!wrap) return;
 
     if (!allSessions.length) {
         wrap.innerHTML = '<div class="no-data">暂无会话记录</div>';
@@ -555,6 +964,37 @@ function renderSessionTable() {
     });
 }
 
+// Shot detail table for Shots tab
+function renderShotDetail() {
+    const wrap = document.getElementById('shotDetailWrap');
+    if (!wrap) return;
+
+    if (!currentShots.length) {
+        wrap.innerHTML = '<div class="no-data">Select a session to view shot details</div>';
+        return;
+    }
+
+    let html = '<table class="shot-detail-table"><thead><tr>' +
+        '<th>#</th><th>Time</th><th>Type</th><th>RPM</th><th>Axis Phi</th><th>Axis Theta</th><th>Peak G</th>' +
+        '</tr></thead><tbody>';
+
+    currentShots.forEach((s, i) => {
+        const type = s.spin_type || 'MIXED';
+        html += '<tr>' +
+            '<td>' + (i + 1) + '</td>' +
+            '<td>' + (s.local_ts || '-') + '</td>' +
+            '<td><span class="sc-' + type + '">' + (SPIN_LABELS[type] || type) + '</span></td>' +
+            '<td style="color:#C8D820">' + Math.round(s.rpm || 0) + '</td>' +
+            '<td>' + (s.spin_axis_phi != null ? s.spin_axis_phi.toFixed(1) + '\u00B0' : '-') + '</td>' +
+            '<td>' + (s.spin_axis_theta != null ? s.spin_axis_theta.toFixed(1) + '\u00B0' : '-') + '</td>' +
+            '<td>' + (s.peak_g != null ? s.peak_g.toFixed(1) : '-') + '</td>' +
+            '</tr>';
+    });
+
+    html += '</tbody></table>';
+    wrap.innerHTML = html;
+}
+
 function formatDuration(sec) {
     if (sec < 60) return Math.round(sec) + '秒';
     const m = Math.floor(sec / 60);
@@ -563,6 +1003,88 @@ function formatDuration(sec) {
     const h = Math.floor(m / 60);
     const rm = m % 60;
     return h + '时' + (rm > 0 ? rm + '分' : '');
+}
+
+// ============================================================
+// Analysis Tab
+// ============================================================
+
+function renderAnalysisTab() {
+    // Summary stats
+    const summaryWrap = document.getElementById('analysisSummary');
+    if (summaryWrap) {
+        const stats = computeStats();
+        summaryWrap.innerHTML =
+            '<div class="mini-stat"><div class="val">' + stats.total + '</div><div class="lbl">击球数</div></div>' +
+            '<div class="mini-stat"><div class="val">' + stats.avgRPM + '</div><div class="lbl">平均 RPM</div></div>' +
+            '<div class="mini-stat"><div class="val">' + stats.maxRPM + '</div><div class="lbl">最高 RPM</div></div>' +
+            '<div class="mini-stat"><div class="val">' + stats.maxG.toFixed(1) + '</div><div class="lbl">最大 G</div></div>';
+    }
+
+    // Polar plot (larger)
+    initAnalysisPolar();
+    renderAnalysisPolar();
+    renderLegendInto('analysisLegend');
+
+    // Distribution
+    renderDistInto('analysisDistChart');
+
+    // Shot-by-shot table
+    renderAnalysisShotTable();
+}
+
+function initAnalysisPolar() {
+    buildPolarSvg('analysisPolarSvg', ACX, ACY, AMAX_R, RPM_RINGS);
+}
+
+function renderAnalysisPolar() {
+    renderPolarShotsOn('analysisPolarSvg', ACX, ACY, AMAX_R, 'analysisPolarSvg-shots');
+}
+
+function renderAnalysisShotTable() {
+    const wrap = document.getElementById('analysisShotTable');
+    if (!wrap) return;
+
+    if (!currentShots.length) {
+        wrap.innerHTML = '<div class="no-data">暂无数据</div>';
+        return;
+    }
+
+    let html = '<table class="shot-detail-table"><thead><tr>' +
+        '<th>#</th><th>Time</th><th>Type</th><th>RPM</th><th>Phi</th><th>Theta</th><th>Peak G</th><th>Duration</th>' +
+        '</tr></thead><tbody>';
+
+    currentShots.forEach((s, i) => {
+        const type = s.spin_type || 'MIXED';
+        html += '<tr>' +
+            '<td>' + (i + 1) + '</td>' +
+            '<td>' + (s.local_ts || '-') + '</td>' +
+            '<td><span class="sc-' + type + '">' + (SPIN_LABELS[type] || type) + '</span></td>' +
+            '<td style="color:#C8D820">' + Math.round(s.rpm || 0) + '</td>' +
+            '<td>' + (s.spin_axis_phi != null ? s.spin_axis_phi.toFixed(1) + '\u00B0' : '-') + '</td>' +
+            '<td>' + (s.spin_axis_theta != null ? s.spin_axis_theta.toFixed(1) + '\u00B0' : '-') + '</td>' +
+            '<td>' + (s.peak_g != null ? s.peak_g.toFixed(1) : '-') + '</td>' +
+            '<td>' + (s.duration_ms != null ? (s.duration_ms / 1000).toFixed(2) + 's' : '-') + '</td>' +
+            '</tr>';
+    });
+
+    html += '</tbody></table>';
+    wrap.innerHTML = html;
+}
+
+// ============================================================
+// Settings Tab
+// ============================================================
+
+function updateSettings() {
+    const urlEl = document.getElementById('settingURL');
+    const sessionEl = document.getElementById('settingSession');
+    if (urlEl) urlEl.textContent = window.location.href;
+    if (sessionEl) {
+        sessionEl.textContent = currentSessionId
+            ? 'Session #' + currentSessionId + (currentSession && !currentSession.end_time ? ' (Recording)' : ' (Ended)')
+            : 'None';
+    }
 }
 
 // ============================================================
@@ -587,7 +1109,6 @@ async function loadSession(sid) {
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
 
     try {
-        // Fetch session detail and shots in parallel
         const [sessionResp, shotsResp] = await Promise.all([
             fetch('/api/sessions/' + sid),
             fetch('/api/sessions/' + sid + '/shots')
@@ -609,6 +1130,7 @@ async function loadSession(sid) {
     updateDistribution();
     renderTimeline();
     renderSessionTable();
+    renderShotDetail();
 
     // If session is still active (no end_time), poll for updates
     if (currentSession && !currentSession.end_time) {
@@ -617,7 +1139,6 @@ async function loadSession(sid) {
 }
 
 async function pollShots(sid) {
-    // Only poll if this is still the active session
     if (currentSessionId !== sid) {
         clearInterval(pollTimer);
         pollTimer = null;
@@ -632,19 +1153,17 @@ async function pollShots(sid) {
         currentSession = await sessionResp.json();
         const newShots = await shotsResp.json();
 
-        // Only re-render if shot count changed
         if (newShots.length !== currentShots.length) {
             currentShots = newShots;
             renderPolarShots();
             updateStats();
             updateDistribution();
             renderTimeline();
+            renderShotDetail();
         }
 
-        // Update session header (sample count may change)
         updateSessionHeader();
 
-        // If session ended, stop polling and refresh session list
         if (currentSession.end_time) {
             clearInterval(pollTimer);
             pollTimer = null;
@@ -662,7 +1181,7 @@ function updateSessionHeader() {
 
     if (!currentSession) {
         dot.className = 'status-dot ended';
-        txt.textContent = '未选择会话';
+        txt.textContent = 'Select Session';
         return;
     }
 
@@ -670,8 +1189,7 @@ function updateSessionHeader() {
     dot.className = 'status-dot ' + (isRecording ? 'active' : 'ended');
 
     const samples = currentSession.total_samples || 0;
-    const statusStr = isRecording ? '录制中' : '已结束';
-    txt.textContent = '会话 #' + currentSession.id + ' (' + statusStr + ') - ' + samples + ' 条数据';
+    txt.textContent = 'Session #' + currentSession.id + (isRecording ? ' Recording' : ' Ended') + ' \u00B7 ' + samples + ' samples';
 }
 
 async function deleteSession(sid) {
@@ -684,7 +1202,6 @@ async function deleteSession(sid) {
         return;
     }
 
-    // If we deleted the current session, clear the view
     if (currentSessionId === sid) {
         currentSessionId = null;
         currentSession = null;
@@ -696,9 +1213,9 @@ async function deleteSession(sid) {
         updateStats();
         updateDistribution();
         renderTimeline();
+        renderShotDetail();
     }
 
-    // Refresh session list
     await fetchSessions();
     renderSessionTable();
 }
@@ -733,8 +1250,13 @@ function exportJSON() {
 // ============================================================
 
 async function init() {
+    initTabs();
     initPolarPlot();
     renderLegend();
+    initBall();
+
+    // Initial gauge draw (empty)
+    drawGauge(0, 200);
 
     await fetchSessions();
     renderSessionTable();
@@ -747,6 +1269,9 @@ async function init() {
         updateDistribution();
         renderTimeline();
     }
+
+    // Update settings on load
+    updateSettings();
 }
 
 init();
