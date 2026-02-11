@@ -39,9 +39,42 @@ body{background:#1a1a2e;color:#e0e0e0;font-family:system-ui,-apple-system,sans-s
 .rec-info{font-size:0.8rem;color:#FF4444;display:flex;align-items:center;gap:5px}
 .rec-dot{width:8px;height:8px;background:#FF4444;border-radius:50%;display:inline-block}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
+.timeline-wrap{padding:12px 16px}
+.timeline-card{background:#16213e;border-radius:12px;padding:16px;box-shadow:0 4px 12px rgba(0,0,0,0.3)}
+.timeline-card h2{font-size:0.95rem;color:#8ab4f8;margin-bottom:10px}
+.shot-stats{display:flex;gap:16px;margin-bottom:12px;flex-wrap:wrap}
+.stat-box{background:#1a1a2e;border-radius:8px;padding:8px 14px;text-align:center;min-width:80px}
+.stat-val{font-size:1.4rem;font-weight:700;color:#C8D820;font-family:'Courier New',monospace}
+.stat-lbl{font-size:0.7rem;color:#888;margin-top:2px}
+.timeline-scroll{overflow-x:auto;padding:8px 0}
+.timeline-bar{position:relative;height:80px;min-width:100%;background:#1a1a2e;border-radius:8px}
+.shot-mark{position:absolute;bottom:0;width:36px;transform:translateX(-18px);cursor:pointer;text-align:center;transition:opacity 0.2s}
+.shot-mark:hover{opacity:0.8}
+.shot-dot{width:12px;height:12px;border-radius:50%;margin:0 auto 2px;border:2px solid rgba(255,255,255,0.3)}
+.shot-rpm{font-size:0.7rem;color:#e0e0e0;font-family:'Courier New',monospace}
+.shot-type{font-size:0.6rem;font-weight:600;margin-top:1px}
+.spin-TOPSPIN{color:#FF6B6B}.spin-BACKSPIN{color:#4ECDC4}
+.spin-SIDE_L,.spin-SIDE_R,.spin-SIDESPIN{color:#FFE66D}
+.spin-SLICE{color:#A8E6CF}.spin-FLAT{color:#888}
+.spin-MIXED{color:#DDA0DD}
+.dot-TOPSPIN{background:#FF6B6B}.dot-BACKSPIN{background:#4ECDC4}
+.dot-SIDE_L,.dot-SIDE_R,.dot-SIDESPIN{background:#FFE66D}
+.dot-SLICE{background:#A8E6CF}.dot-FLAT{background:#888}
+.dot-MIXED{background:#DDA0DD}
+.shot-detail{background:#0f3460;border-radius:10px;padding:14px;margin-top:10px;display:none}
+.shot-detail.show{display:block}
+.shot-detail h3{font-size:0.9rem;color:#C8D820;margin-bottom:8px}
+.shot-detail-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.shot-detail-item{background:#1a1a2e;border-radius:6px;padding:6px 10px;text-align:center}
+.shot-detail-item .lbl{font-size:0.65rem;color:#8ab4f8;display:block}
+.shot-detail-item .val{font-size:1rem;font-weight:600;color:#e0e0e0;font-family:'Courier New',monospace}
+.impact-flash{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(255,100,100,0.15);pointer-events:none;opacity:0;transition:opacity 0.1s}
+.impact-flash.active{opacity:1}
+.btn-clear{background:#e67e22;color:#fff}
 </style>
 </head>
 <body>
+<div class="impact-flash" id="impactFlash"></div>
 <div class="header">
 <h1>TennisBall IMU</h1>
 <div class="status"><span class="status-dot off" id="sDot"></span><span id="sTxt">Disconnected</span></div>
@@ -77,6 +110,23 @@ body{background:#1a1a2e;color:#e0e0e0;font-family:system-ui,-apple-system,sans-s
 <span class="rec-info" id="recInfo" style="display:none"><span class="rec-dot"></span>Recording... <span id="recCnt">0</span></span>
 <button class="btn btn-export" onclick="exportCSV()">Export CSV</button>
 <button class="btn btn-reset" onclick="resetBall()">Reset Ball</button>
+<button class="btn btn-clear" onclick="clearShots()">Clear Shots</button>
+</div>
+<div class="timeline-wrap">
+<div class="timeline-card">
+<h2>Shot Timeline</h2>
+<div class="shot-stats" id="shotStats">
+<div class="stat-box"><div class="stat-val" id="statTotal">0</div><div class="stat-lbl">Shots</div></div>
+<div class="stat-box"><div class="stat-val" id="statAvgRPM">0</div><div class="stat-lbl">Avg RPM</div></div>
+<div class="stat-box"><div class="stat-val" id="statMaxRPM">0</div><div class="stat-lbl">Max RPM</div></div>
+<div class="stat-box"><div class="stat-val" id="statMaxG">0</div><div class="stat-lbl">Max G</div></div>
+</div>
+<div class="timeline-scroll"><div class="timeline-bar" id="timelineBar"></div></div>
+<div class="shot-detail" id="shotDetail">
+<h3 id="shotDetailTitle">Shot #1</h3>
+<div class="shot-detail-grid" id="shotDetailGrid"></div>
+</div>
+</div>
 </div>
 <script>
 'use strict';
@@ -90,6 +140,9 @@ let quat={w:1,x:0,y:0,z:0},rpm=0;
 let ax=0,ay=0,az=0,gx=0,gy=0,gz=0;
 let gyroH={x:[],y:[],z:[]},accelH={x:[],y:[],z:[]};
 let recording=false,recData=[];
+let shots=[];
+let firstShotTime=0;
+const impactFlash=document.getElementById('impactFlash');
 
 const sDot=document.getElementById('sDot'),sTxt=document.getElementById('sTxt');
 const rpmVal=document.getElementById('rpmVal'),spinType=document.getElementById('spinType');
@@ -138,6 +191,19 @@ rpm=d.rpm||0;
 pushHist(gyroH,gx,gy,gz);
 pushHist(accelH,ax,ay,az);
 if(recording){recData.push({t:d.t||0,ax,ay,az,gx,gy,gz,qw:quat.w,qx:quat.x,qy:quat.y,qz:quat.z,rpm});recCnt.textContent=recData.length;}
+// Impact flash
+if(d.imp===1){
+    impactFlash.classList.add('active');
+    setTimeout(()=>impactFlash.classList.remove('active'),150);
+}
+// Live spin type from firmware
+if(d.spin){spinType.textContent=d.spin;spinType.className='spin-type spin-'+d.spin;}
+// Shot event from firmware
+if(d.event==='shot'){
+    shots.push(d);
+    if(shots.length===1)firstShotTime=d.t;
+    updateTimeline();
+}
 }catch(err){}
 };
 }
@@ -206,7 +272,7 @@ function updateData(){
 dataEls.ax.textContent=ax.toFixed(3);dataEls.ay.textContent=ay.toFixed(3);dataEls.az.textContent=az.toFixed(3);
 dataEls.gx.textContent=gx.toFixed(1);dataEls.gy.textContent=gy.toFixed(1);dataEls.gz.textContent=gz.toFixed(1);
 rpmVal.textContent=Math.round(rpm);
-spinType.textContent=classifySpin(gx,gy,gz);
+if(!connected)spinType.textContent=classifySpin(gx,gy,gz);
 }
 
 let lastFrame=0;
@@ -228,14 +294,85 @@ else{btn.textContent='Record';btn.classList.remove('active');recInfo.style.displ
 }
 
 function exportCSV(){
-if(!recData.length){alert('No recorded data.');return;}
-let csv='timestamp,ax,ay,az,gx,gy,gz,qw,qx,qy,qz,rpm\n';
-recData.forEach(r=>{csv+=r.t+','+r.ax+','+r.ay+','+r.az+','+r.gx+','+r.gy+','+r.gz+','+r.qw+','+r.qx+','+r.qy+','+r.qz+','+r.rpm+'\n';});
+if(!recData.length&&!shots.length){alert('No data.');return;}
+let csv='';
+if(recData.length){
+    csv+='timestamp,ax,ay,az,gx,gy,gz,qw,qx,qy,qz,rpm\n';
+    recData.forEach(r=>{csv+=r.t+','+r.ax+','+r.ay+','+r.az+','+r.gx+','+r.gy+','+r.gz+','+r.qw+','+r.qx+','+r.qy+','+r.qz+','+r.rpm+'\n';});
+}
+if(shots.length){
+    csv+='\nShots\nid,timestamp,rpm,peakG,gx,gy,gz,type\n';
+    shots.forEach((s,i)=>{csv+=i+','+s.t+','+s.rpm+','+s.peakG+','+s.gx+','+s.gy+','+s.gz+','+s.type+'\n';});
+}
 const blob=new Blob([csv],{type:'text/csv'});
 const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='imu_data.csv';a.click();URL.revokeObjectURL(a.href);
 }
 
 function resetBall(){if(ws&&ws.readyState===1)ws.send('reset');}
+
+function updateTimeline(){
+    const bar=document.getElementById('timelineBar');
+    const total=document.getElementById('statTotal');
+    const avgRPM=document.getElementById('statAvgRPM');
+    const maxRPM=document.getElementById('statMaxRPM');
+    const maxG=document.getElementById('statMaxG');
+
+    if(!shots.length){bar.innerHTML='';total.textContent='0';avgRPM.textContent='0';maxRPM.textContent='0';maxG.textContent='0';return;}
+
+    // Stats
+    let sumRPM=0,mxRPM=0,mxG=0;
+    shots.forEach(s=>{sumRPM+=s.rpm;if(s.rpm>mxRPM)mxRPM=s.rpm;if(s.peakG>mxG)mxG=s.peakG;});
+    total.textContent=shots.length;
+    avgRPM.textContent=Math.round(sumRPM/shots.length);
+    maxRPM.textContent=Math.round(mxRPM);
+    maxG.textContent=mxG.toFixed(1);
+
+    // Timeline markers
+    const timeSpan=Math.max(shots[shots.length-1].t-firstShotTime,1000);
+    const barW=Math.max(shots.length*50,bar.parentElement.clientWidth);
+    bar.style.width=barW+'px';
+    bar.innerHTML='';
+
+    shots.forEach((s,i)=>{
+        const pct=(s.t-firstShotTime)/timeSpan;
+        const x=20+pct*(barW-40);
+        const mk=document.createElement('div');
+        mk.className='shot-mark';
+        mk.style.left=x+'px';
+        mk.onclick=()=>showShotDetail(i);
+        mk.innerHTML='<div class="shot-dot dot-'+s.type+'"></div><div class="shot-rpm">'+Math.round(s.rpm)+'</div><div class="shot-type spin-'+s.type+'">'+s.type+'</div>';
+        bar.appendChild(mk);
+    });
+}
+
+function showShotDetail(idx){
+    const s=shots[idx];
+    const detail=document.getElementById('shotDetail');
+    const title=document.getElementById('shotDetailTitle');
+    const grid=document.getElementById('shotDetailGrid');
+    detail.classList.add('show');
+    title.textContent='Shot #'+(idx+1)+' - '+s.type;
+    title.className='';title.style.color=getSpinColor(s.type);
+    grid.innerHTML=
+        '<div class="shot-detail-item"><span class="lbl">RPM</span><span class="val">'+Math.round(s.rpm)+'</span></div>'+
+        '<div class="shot-detail-item"><span class="lbl">Peak G</span><span class="val">'+s.peakG.toFixed(1)+'</span></div>'+
+        '<div class="shot-detail-item"><span class="lbl">Type</span><span class="val">'+s.type+'</span></div>'+
+        '<div class="shot-detail-item"><span class="lbl">Gyro X</span><span class="val">'+s.gx.toFixed(1)+'</span></div>'+
+        '<div class="shot-detail-item"><span class="lbl">Gyro Y</span><span class="val">'+s.gy.toFixed(1)+'</span></div>'+
+        '<div class="shot-detail-item"><span class="lbl">Gyro Z</span><span class="val">'+s.gz.toFixed(1)+'</span></div>';
+}
+
+function getSpinColor(type){
+    const c={'TOPSPIN':'#FF6B6B','BACKSPIN':'#4ECDC4','SIDE_L':'#FFE66D','SIDE_R':'#FFE66D','SIDESPIN':'#FFE66D','SLICE':'#A8E6CF','FLAT':'#888','MIXED':'#DDA0DD'};
+    return c[type]||'#e0e0e0';
+}
+
+function clearShots(){
+    shots=[];firstShotTime=0;
+    updateTimeline();
+    document.getElementById('shotDetail').classList.remove('show');
+    if(ws&&ws.readyState===1)ws.send('clear_shots');
+}
 
 connectWS();
 requestAnimationFrame(loop);

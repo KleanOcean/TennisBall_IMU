@@ -18,6 +18,7 @@
 #include <WebServer.h>
 #include <WebSocketsServer.h>
 #include <math.h>
+#include <string.h>
 #include "webpage.h"  // contains: const char index_html[] PROGMEM = R"rawliteral(...)rawliteral";
 
 // --- WiFi AP Config ---
@@ -43,6 +44,19 @@ struct Quat { float w, x, y, z; };
 // --- Orientation state ---
 static Quat orient = {1, 0, 0, 0};
 
+// --- Seam curve ---
+static const float SEAM_AMP = 0.44f;
+static const int   SEAM_N   = 72;
+static Vec3 seamPts[SEAM_N];
+
+// --- Ball rendering on ATOM screen ---
+static const int16_t BALL_CY = 52;   // ball center Y (above screen center)
+static const int16_t BALL_R  = 30;   // ball radius
+static const uint16_t COL_BALL    = 0xCE40;  // tennis optic yellow
+static const uint16_t COL_BALL_HI = 0xDF00;  // highlight
+static const uint16_t COL_SEAM    = 0xFFFF;  // white seam
+static const uint16_t COL_SEAM_DIM= 0x4208;  // gray back seam
+
 // --- Filtered sensor values ---
 static float filtGx  = 0, filtGy = 0, filtGz = 0;
 static float filtRPM = 0;
@@ -53,6 +67,31 @@ static uint32_t lastWsSendMs = 0;
 
 // --- WebSocket client tracking ---
 static uint8_t clientCount = 0;
+
+// --- Impact detection ---
+static const float IMPACT_THRESH = 4.0f;  // g threshold
+static const uint32_t IMPACT_COOLDOWN_MS = 200; // debounce
+static uint32_t lastImpactMs = 0;
+static bool impactFlag = false;  // set true on impact, cleared after WS send
+
+// --- Shot tracking ---
+static const int MAX_SHOTS = 50;
+struct ShotEvent {
+    uint32_t timestamp;
+    float peakRPM;
+    float peakG;
+    float gx, gy, gz;  // gyro at impact for classification
+    char spinType[12];
+};
+static ShotEvent shots[MAX_SHOTS];
+static int shotCount = 0;
+
+// --- Peak tracking after impact ---
+static bool trackingPeak = false;
+static uint32_t peakTrackStartMs = 0;
+static float peakRPMval = 0;
+static float peakGval = 0;
+static float peakGx = 0, peakGy = 0, peakGz = 0;
 
 // ==================== Quaternion math ====================
 
@@ -86,6 +125,25 @@ static Vec3 qrot(Quat q, Vec3 v) {
     };
 }
 
+// ==================== Spin classification ====================
+
+static void classifySpin(float gx, float gy, float gz, float rpm, char* out) {
+    if (rpm < 5.0f) { strcpy(out, "FLAT"); return; }
+    float agx = fabsf(gx), agy = fabsf(gy), agz = fabsf(gz);
+    float total = agx + agy + agz;
+    if (total < 1.0f) { strcpy(out, "FLAT"); return; }
+    float rx = agx / total, ry = agy / total, rz = agz / total;
+    if (rx > 0.5f) {
+        strcpy(out, gx > 0 ? "TOPSPIN" : "BACKSPIN");
+    } else if (ry > 0.5f) {
+        strcpy(out, gy > 0 ? "SIDE_R" : "SIDE_L");
+    } else if (rz > 0.5f) {
+        strcpy(out, "SLICE");
+    } else {
+        strcpy(out, "MIXED");
+    }
+}
+
 // ==================== WebSocket event handler ====================
 
 void onWsEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length) {
@@ -100,6 +158,9 @@ void onWsEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length) {
             // Handle commands from web page
             if (strcmp((char*)payload, "reset") == 0) {
                 orient = {1, 0, 0, 0};
+            }
+            if (strcmp((char*)payload, "clear_shots") == 0) {
+                shotCount = 0;
             }
             break;
         default:
@@ -140,6 +201,17 @@ void setup() {
     // WebSocket server for real-time IMU streaming
     wsServer.begin();
     wsServer.onEvent(onWsEvent);
+
+    // Pre-compute seam points on unit sphere
+    for (int i = 0; i < SEAM_N; i++) {
+        float t   = 2.0f * M_PI * i / SEAM_N;
+        float lat = SEAM_AMP * sinf(2.0f * t);
+        seamPts[i] = {
+            cosf(lat) * cosf(t),
+            cosf(lat) * sinf(t),
+            sinf(lat)
+        };
+    }
 
     lastUs = micros();
 }
@@ -184,6 +256,53 @@ void loop() {
                          d.gyro.z * d.gyro.z) / 6.0f;
     filtRPM += 0.08f * (rawRPM - filtRPM);
 
+    uint32_t nowMs = millis();
+
+    // --- Impact detection ---
+    float accelMag = sqrtf(d.accel.x * d.accel.x + d.accel.y * d.accel.y + d.accel.z * d.accel.z);
+
+    if (accelMag > IMPACT_THRESH && (nowMs - lastImpactMs) > IMPACT_COOLDOWN_MS) {
+        lastImpactMs = nowMs;
+        impactFlag = true;
+        trackingPeak = true;
+        peakTrackStartMs = nowMs;
+        peakRPMval = filtRPM;
+        peakGval = accelMag;
+        peakGx = filtGx; peakGy = filtGy; peakGz = filtGz;
+    }
+
+    // Track peak values for 100ms after impact
+    if (trackingPeak) {
+        if (filtRPM > peakRPMval) peakRPMval = filtRPM;
+        if (accelMag > peakGval) peakGval = accelMag;
+        if (fabsf(filtGx) + fabsf(filtGy) + fabsf(filtGz) > fabsf(peakGx) + fabsf(peakGy) + fabsf(peakGz)) {
+            peakGx = filtGx; peakGy = filtGy; peakGz = filtGz;
+        }
+
+        if (nowMs - peakTrackStartMs > 100) {
+            trackingPeak = false;
+            // Record shot event
+            if (shotCount < MAX_SHOTS) {
+                ShotEvent &s = shots[shotCount];
+                s.timestamp = lastImpactMs;
+                s.peakRPM = peakRPMval;
+                s.peakG = peakGval;
+                s.gx = peakGx; s.gy = peakGy; s.gz = peakGz;
+                classifySpin(peakGx, peakGy, peakGz, peakRPMval, s.spinType);
+
+                // Send shot event via WebSocket
+                char shotJson[200];
+                snprintf(shotJson, sizeof(shotJson),
+                    "{\"event\":\"shot\",\"id\":%d,\"t\":%lu,\"rpm\":%.0f,\"peakG\":%.1f,"
+                    "\"gx\":%.1f,\"gy\":%.1f,\"gz\":%.1f,\"type\":\"%s\"}",
+                    shotCount, s.timestamp, s.peakRPM, s.peakG,
+                    s.gx, s.gy, s.gz, s.spinType);
+                wsServer.broadcastTXT(shotJson);
+                shotCount++;
+            }
+        }
+    }
+
     // Integrate quaternion from angular velocity
     float wmag = sqrtf(gx * gx + gy * gy + gz * gz);
     if (wmag > 0.01f) {
@@ -202,67 +321,97 @@ void loop() {
     }
 
     // --- Send WebSocket data at 50Hz (every 20ms) ---
-    uint32_t nowMs = millis();
     if (nowMs - lastWsSendMs >= 20 && clientCount > 0) {
         lastWsSendMs = nowMs;
 
-        char json[256];
+        char spinLabel[12];
+        classifySpin(filtGx, filtGy, filtGz, filtRPM, spinLabel);
+
+        char json[320];
         snprintf(json, sizeof(json),
             "{\"t\":%lu,\"ax\":%.3f,\"ay\":%.3f,\"az\":%.3f,"
             "\"gx\":%.1f,\"gy\":%.1f,\"gz\":%.1f,"
             "\"qw\":%.4f,\"qx\":%.4f,\"qy\":%.4f,\"qz\":%.4f,"
-            "\"rpm\":%.0f}",
+            "\"rpm\":%.0f,\"spin\":\"%s\",\"imp\":%d}",
             nowMs, d.accel.x, d.accel.y, d.accel.z,
             filtGx, filtGy, filtGz,
             orient.w, orient.x, orient.y, orient.z,
-            filtRPM);
+            filtRPM, spinLabel, impactFlag ? 1 : 0);
+
+        if (impactFlag) impactFlag = false;  // clear after sending
 
         wsServer.broadcastTXT(json);
     }
 
-    // --- Update ATOM S3 screen (every 200ms to save CPU) ---
+    // --- Update ATOM S3 screen (~30fps for smooth ball rotation) ---
     static uint32_t lastScreenMs = 0;
-    if (nowMs - lastScreenMs >= 200) {
+    if (nowMs - lastScreenMs >= 33) {
         lastScreenMs = nowMs;
 
         canvas.fillSprite(TFT_BLACK);
-        canvas.setTextColor(TFT_WHITE);
+        char buf[32];
+
+        // --- Tennis ball ---
+        // Shadow
+        canvas.fillCircle(CX + 2, BALL_CY + 2, BALL_R, 0x1082);
+        // Body
+        canvas.fillCircle(CX, BALL_CY, BALL_R, COL_BALL);
+        // Highlight
+        canvas.fillCircle(CX - 6, BALL_CY - 6, BALL_R * 2 / 3, COL_BALL_HI);
+
+        // Seam
+        for (int i = 0; i < SEAM_N; i++) {
+            int j = (i + 1) % SEAM_N;
+            Vec3 p1 = qrot(orient, seamPts[i]);
+            Vec3 p2 = qrot(orient, seamPts[j]);
+            int16_t sx1 = CX + (int16_t)(p1.x * BALL_R);
+            int16_t sy1 = BALL_CY - (int16_t)(p1.y * BALL_R);
+            int16_t sx2 = CX + (int16_t)(p2.x * BALL_R);
+            int16_t sy2 = BALL_CY - (int16_t)(p2.y * BALL_R);
+            if (p1.z > 0.05f && p2.z > 0.05f) {
+                canvas.drawLine(sx1, sy1, sx2, sy2, COL_SEAM);
+            } else if (p1.z > -0.15f && p2.z > -0.15f) {
+                canvas.drawLine(sx1, sy1, sx2, sy2, COL_SEAM_DIM);
+            }
+        }
+        // Outline
+        canvas.drawCircle(CX, BALL_CY, BALL_R, 0x6B4D);
+
+        // --- RPM (large, top) ---
         canvas.setFont(&fonts::FreeSansBold9pt7b);
         canvas.setTextDatum(top_center);
+        canvas.setTextColor(TFT_WHITE);
+        if (filtRPM < 1.0f) {
+            canvas.drawString("READY", CX, 0);
+        } else {
+            snprintf(buf, sizeof(buf), "%d RPM", (int)filtRPM);
+            canvas.drawString(buf, CX, 0);
+        }
 
-        // Title
-        canvas.drawString("SPIN", CX, 2);
-
+        // --- WiFi info (small, bottom area) ---
         canvas.setFont(&fonts::Font0);
         canvas.setTextDatum(top_left);
 
-        char buf[32];
+        // Connection status dot
+        uint16_t dotCol = clientCount > 0 ? TFT_GREEN : 0x4208;
+        canvas.fillCircle(4, 90, 3, dotCol);
+        canvas.setTextColor(clientCount > 0 ? TFT_GREEN : 0x8410);
+        snprintf(buf, sizeof(buf), "%d connected", clientCount);
+        canvas.drawString(buf, 10, 87);
 
-        // WiFi SSID
+        // Shot count
+        if (shotCount > 0) {
+            canvas.setTextColor(0xFD20);  // orange
+            snprintf(buf, sizeof(buf), "%d shots", shotCount);
+            canvas.drawString(buf, 70, 87);
+        }
+
+        canvas.setTextColor(0x8410);  // dim gray
+        canvas.drawString(AP_SSID, 4, 100);
+        snprintf(buf, sizeof(buf), "pw: %s", AP_PASS);
+        canvas.drawString(buf, 4, 110);
         canvas.setTextColor(TFT_CYAN);
-        canvas.drawString("WiFi:", 4, 28);
-        canvas.setTextColor(TFT_WHITE);
-        canvas.drawString(AP_SSID, 4, 40);
-
-        // IP address
-        canvas.setTextColor(TFT_CYAN);
-        canvas.drawString("IP:", 4, 56);
-        canvas.setTextColor(TFT_WHITE);
-        canvas.drawString(WiFi.softAPIP().toString().c_str(), 4, 68);
-
-        // Client count
-        canvas.setTextColor(TFT_CYAN);
-        canvas.drawString("Clients:", 4, 84);
-        canvas.setTextColor(clientCount > 0 ? TFT_GREEN : TFT_DARKGREY);
-        snprintf(buf, sizeof(buf), "%d", clientCount);
-        canvas.drawString(buf, 60, 84);
-
-        // RPM display at bottom
-        canvas.setTextColor(TFT_YELLOW);
-        snprintf(buf, sizeof(buf), "%d RPM", (int)filtRPM);
-        canvas.setFont(&fonts::FreeSansBold9pt7b);
-        canvas.setTextDatum(bottom_center);
-        canvas.drawString(buf, CX, H - 4);
+        canvas.drawString(WiFi.softAPIP().toString().c_str(), 4, 120);
 
         canvas.pushSprite(0, 0);
     }
