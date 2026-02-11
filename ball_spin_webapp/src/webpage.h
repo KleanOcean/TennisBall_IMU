@@ -32,6 +32,8 @@ body{background:#0a0e27;color:#fff;font-family:system-ui,-apple-system,sans-seri
 /* Ball */
 .ball-card{flex:1;display:flex;align-items:center;justify-content:center}
 .ball-card canvas{max-width:100%;height:auto}
+.ball-toggle{position:absolute;top:8px;right:8px;z-index:2;background:#111633cc;border:none;border-radius:6px;padding:6px 10px;font-size:.75rem;color:#667788;cursor:pointer;font-weight:600;letter-spacing:1px;transition:color .2s}
+.ball-toggle:hover{color:#C8D820}
 /* Charts */
 .chart-card{flex:1;display:flex;flex-direction:column}
 .chart-cv{width:100%;flex:1;min-height:160px;display:block}
@@ -125,8 +127,9 @@ body{background:#0a0e27;color:#fff;font-family:system-ui,-apple-system,sans-seri
 </div>
 </div>
 <div class="col">
-<div class="card ball-card">
+<div class="card ball-card" style="position:relative">
 <canvas id="ballCv" width="350" height="350"></canvas>
+<button id="ballToggle" class="ball-toggle" onclick="toggleBallMode()">WIRE</button>
 </div>
 </div>
 <div class="col">
@@ -175,6 +178,7 @@ let ax=0,ay=0,az=0,gx=0,gy=0,gz=0;
 let rpmHist=[];
 let recording=false,recData=[];
 let shots=[],firstShotTime=0;
+let ballMode=localStorage.getItem('ballMode')||'wire';
 const impactFlash=document.getElementById('impactFlash');
 const sDot=document.getElementById('sDot'),sTxt=document.getElementById('sTxt');
 const spinType=document.getElementById('spinType');
@@ -240,8 +244,63 @@ if(d.event==='shot'){shots.push(d);if(shots.length===1)firstShotTime=d.t;updateT
 };
 }
 
+/* Ball mode toggle */
+function toggleBallMode(){
+ballMode=(ballMode==='wire')?'solid':'wire';
+localStorage.setItem('ballMode',ballMode);
+document.getElementById('ballToggle').textContent=ballMode==='wire'?'WIRE':'SOLID';
+}
+
+/* Draw solid ball */
+function drawBallSolid(){
+const w=350,h=350,cx=w/2,cy=h/2,R=140;
+const ctx=ballCtx;
+ctx.clearRect(0,0,w,h);
+
+/* Filled sphere with gradient */
+const grd=ctx.createRadialGradient(cx-R*0.3,cy-R*0.3,R*0.05,cx,cy,R);
+grd.addColorStop(0,'#E8F040');
+grd.addColorStop(1,'#C8D820');
+ctx.beginPath();
+ctx.arc(cx,cy,R,0,2*Math.PI);
+ctx.fillStyle=grd;
+ctx.fill();
+
+/* Thin dark outline */
+ctx.beginPath();
+ctx.arc(cx,cy,R,0,2*Math.PI);
+ctx.strokeStyle='rgba(40,50,10,0.4)';
+ctx.lineWidth=1.5;
+ctx.stroke();
+
+/* Seam curve */
+const sPts=[];
+for(let i=0;i<=SEAM_N;i++){
+const idx=i%SEAM_N;
+const rv=qrot(quat,seamPts[idx]);
+sPts.push({sx:cx+rv.x*R,sy:cy-rv.y*R,z:rv.z});
+}
+for(let i=1;i<sPts.length;i++){
+const p0=sPts[i-1],p1=sPts[i];
+const zAvg=(p0.z+p1.z)/2;
+if(zAvg<=-0.15)continue;
+ctx.beginPath();
+ctx.moveTo(p0.sx,p0.sy);
+ctx.lineTo(p1.sx,p1.sy);
+if(zAvg>0){
+ctx.strokeStyle='#FFFFFF';
+ctx.lineWidth=2.5;
+}else{
+ctx.strokeStyle='rgba(200,200,200,0.3)';
+ctx.lineWidth=1.5;
+}
+ctx.stroke();
+}
+}
+
 /* Draw wireframe ball */
 function drawBall(){
+if(ballMode==='solid'){drawBallSolid();return;}
 const w=350,h=350,cx=w/2,cy=h/2,R=140;
 const ctx=ballCtx;
 ctx.clearRect(0,0,w,h);
@@ -534,6 +593,7 @@ drawRpmChart();
 if(!connected)spinType.textContent=classifySpin(gx,gy,gz);
 }
 
+document.getElementById('ballToggle').textContent=ballMode==='wire'?'WIRE':'SOLID';
 connectWS();
 requestAnimationFrame(loop);
 </script>

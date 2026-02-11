@@ -200,7 +200,10 @@ body{background:var(--bg);color:var(--text-primary);font-family:system-ui,-apple
             <div class="card">
                 <div class="ball-glow-wrap">
                     <div class="ball-glow"></div>
-                    <canvas id="ballCanvas" width="380" height="380"></canvas>
+                    <div style="position:relative">
+                        <canvas id="ballCanvas" width="380" height="380"></canvas>
+                        <button id="ballToggle" onclick="toggleBallMode()" style="position:absolute;top:8px;right:8px;z-index:10;background:#111633cc;border-radius:6px;padding:4px 10px;font-size:0.75rem;color:#667788;cursor:pointer;border:1px solid #1a2040;transition:color 0.2s,border-color 0.2s" onmouseenter="this.style.color='#C8D820';this.style.borderColor='#C8D820'" onmouseleave="this.style.color='#667788';this.style.borderColor='#1a2040'">WIRE</button>
+                    </div>
                 </div>
                 <div class="ball-label">3D SPIN VISUALIZATION</div>
             </div>
@@ -352,6 +355,7 @@ let selectedShotIdx = -1;
 let ballRotY = 0;
 let ballRotX = 0.3;
 let ballAnimFrame = null;
+let ballMode = (typeof sessionStorage !== 'undefined' && sessionStorage.getItem('ballMode')) || 'wire';
 
 // ============================================================
 // Tab Switching
@@ -486,6 +490,7 @@ function animateBall() {
 }
 
 function drawBall() {
+    if (ballMode === 'solid') { drawBallSolid(); return; }
     const canvas = document.getElementById('ballCanvas');
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
@@ -594,6 +599,102 @@ function drawLineStrip(ctx, points, lineWidth, isSeam) {
     }
     ctx.shadowBlur = 0;
     ctx.shadowColor = 'transparent';
+}
+
+// ============================================================
+// Ball Mode Toggle
+// ============================================================
+
+function toggleBallMode() {
+    ballMode = (ballMode === 'wire') ? 'solid' : 'wire';
+    sessionStorage.setItem('ballMode', ballMode);
+    document.getElementById('ballToggle').textContent = ballMode === 'wire' ? 'WIRE' : 'SOLID';
+}
+
+// ============================================================
+// Solid Tennis Ball Rendering
+// ============================================================
+
+function drawBallSolid() {
+    const canvas = document.getElementById('ballCanvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    const cx = w / 2, cy = h / 2;
+    const R = Math.min(w, h) * 0.38;
+
+    // Rotation matrices (same as drawBall)
+    const cosY = Math.cos(ballRotY), sinY = Math.sin(ballRotY);
+    const cosX = Math.cos(ballRotX), sinX = Math.sin(ballRotX);
+
+    function rotate(x, y, z) {
+        let x1 = x * cosY + z * sinY;
+        let z1 = -x * sinY + z * cosY;
+        let y1 = y * cosX - z1 * sinX;
+        let z2 = y * sinX + z1 * cosX;
+        return { x: x1, y: y1, z: z2 };
+    }
+
+    function project(p) {
+        return { sx: cx + p.x, sy: cy - p.y, depth: p.z / R };
+    }
+
+    // Draw filled sphere with radial gradient
+    const grad = ctx.createRadialGradient(cx - R * 0.25, cy - R * 0.25, R * 0.05, cx, cy, R);
+    grad.addColorStop(0, '#E8F040');
+    grad.addColorStop(1, '#C8D820');
+    ctx.beginPath();
+    ctx.arc(cx, cy, R, 0, Math.PI * 2);
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // Thin dark outline around the sphere
+    ctx.beginPath();
+    ctx.arc(cx, cy, R, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(40,50,10,0.4)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // Tennis ball seam curve (same parametric formula as drawBall)
+    const seamPoints = [];
+    for (let i = 0; i <= 72; i++) {
+        const t = (i / 72) * 2 * Math.PI;
+        const lat = 0.44 * Math.sin(2 * t);
+        const lon = t;
+        const x = R * Math.cos(lat) * Math.cos(lon);
+        const y = R * Math.cos(lat) * Math.sin(lon);
+        const z = R * Math.sin(lat);
+        const rotated = rotate(x, y, z);
+        const proj = project(rotated);
+        seamPoints.push(proj);
+    }
+
+    // Draw seam segments with depth-based visibility
+    for (let i = 0; i < seamPoints.length - 1; i++) {
+        const p1 = seamPoints[i], p2 = seamPoints[i + 1];
+        const avgDepth = (p1.depth + p2.depth) / 2;
+
+        if (avgDepth > 0) {
+            // Front-facing: full opacity white
+            ctx.beginPath();
+            ctx.moveTo(p1.sx, p1.sy);
+            ctx.lineTo(p2.sx, p2.sy);
+            ctx.strokeStyle = '#FFFFFF';
+            ctx.lineWidth = 2.5;
+            ctx.stroke();
+        } else if (avgDepth > -0.15) {
+            // Back-facing but near edge: faint gray
+            ctx.beginPath();
+            ctx.moveTo(p1.sx, p1.sy);
+            ctx.lineTo(p2.sx, p2.sy);
+            ctx.strokeStyle = 'rgba(180,180,180,0.35)';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+        }
+        // Deeper back: don't draw
+    }
 }
 
 // ============================================================
@@ -1253,6 +1354,12 @@ async function init() {
     initPolarPlot();
     renderLegend();
     initBall();
+
+    // Initialize ball toggle button text based on persisted mode
+    const ballToggleBtn = document.getElementById('ballToggle');
+    if (ballToggleBtn) {
+        ballToggleBtn.textContent = ballMode === 'wire' ? 'WIRE' : 'SOLID';
+    }
 
     // Initial gauge draw (empty)
     drawGauge(0, 200);
