@@ -1,0 +1,755 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>网球旋转观测器</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#1a1a2e;color:#e0e0e0;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;min-height:100vh;overflow-x:hidden}
+
+/* Header */
+.header{display:flex;justify-content:space-between;align-items:center;padding:12px 20px;background:#0f3460;border-bottom:2px solid #1a5276}
+.header h1{font-size:1.3rem;color:#C8D820;letter-spacing:1px}
+.session-info{display:flex;align-items:center;gap:10px;font-size:0.85rem}
+.session-info .status-dot{width:10px;height:10px;border-radius:50%;display:inline-block;transition:background 0.3s}
+.session-info .status-dot.active{background:#44FF44;box-shadow:0 0 6px #44FF44;animation:pulse 1.5s infinite}
+.session-info .status-dot.ended{background:#888}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
+
+/* Main layout */
+.main{display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:16px;max-width:1400px;margin:0 auto}
+@media(max-width:900px){.main{grid-template-columns:1fr;padding:10px;gap:10px}}
+
+/* Cards */
+.card{background:#16213e;border-radius:12px;padding:16px;box-shadow:0 4px 12px rgba(0,0,0,0.3)}
+.card h2{font-size:0.95rem;color:#8ab4f8;margin-bottom:10px}
+
+/* Stats cards grid */
+.stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px}
+.stat-box{background:#1a1a2e;border-radius:8px;padding:12px 14px;text-align:center}
+.stat-val{font-size:2rem;font-weight:700;color:#C8D820;font-family:'Courier New',monospace;line-height:1.1}
+.stat-lbl{font-size:0.75rem;color:#888;margin-top:4px}
+
+/* Polar plot area */
+.polar-container{display:flex;flex-direction:column;align-items:center}
+.polar-container svg{max-width:100%;height:auto}
+
+/* Legend / filter buttons */
+.legend{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;justify-content:center}
+.legend-btn{display:flex;align-items:center;gap:5px;padding:4px 10px;border-radius:16px;border:1px solid rgba(255,255,255,0.15);background:#1a1a2e;cursor:pointer;font-size:0.75rem;color:#e0e0e0;transition:opacity 0.2s}
+.legend-btn:hover{border-color:rgba(255,255,255,0.3)}
+.legend-btn.hidden{opacity:0.3}
+.legend-dot{width:10px;height:10px;border-radius:50%;display:inline-block}
+
+/* Spin distribution bar chart */
+.dist-bar-wrap{margin-top:8px}
+.dist-row{display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:0.8rem}
+.dist-label{width:60px;text-align:right;color:#8ab4f8;flex-shrink:0}
+.dist-bar-bg{flex:1;height:18px;background:#1a1a2e;border-radius:4px;overflow:hidden;position:relative}
+.dist-bar-fill{height:100%;border-radius:4px;transition:width 0.4s ease}
+.dist-pct{width:40px;text-align:left;color:#999;font-family:'Courier New',monospace}
+
+/* Timeline section */
+.timeline-section{grid-column:1/-1;padding:0}
+.timeline-scroll{overflow-x:auto;padding:8px 0}
+.timeline-bar{position:relative;height:80px;min-width:100%;background:#1a1a2e;border-radius:8px}
+.shot-mark{position:absolute;bottom:0;width:40px;transform:translateX(-20px);cursor:pointer;text-align:center;transition:opacity 0.2s}
+.shot-mark:hover{opacity:0.8}
+.shot-mark.selected .shot-dot{border-color:#fff;box-shadow:0 0 8px rgba(255,255,255,0.5)}
+.shot-dot{width:12px;height:12px;border-radius:50%;margin:0 auto 2px;border:2px solid rgba(255,255,255,0.2);transition:all 0.2s}
+.shot-rpm{font-size:0.7rem;color:#e0e0e0;font-family:'Courier New',monospace}
+.shot-type-label{font-size:0.6rem;font-weight:600;margin-top:1px}
+
+/* Spin type colors for text */
+.sc-TOPSPIN{color:#FF6B6B}.sc-BACKSPIN{color:#4ECDC4}
+.sc-SIDE_L,.sc-SIDE_R,.sc-SIDESPIN{color:#FFE66D}
+.sc-SLICE{color:#A8E6CF}.sc-FLAT{color:#888}.sc-MIXED{color:#DDA0DD}
+
+/* Session history table */
+.history-section{grid-column:1/-1}
+.session-table{width:100%;border-collapse:collapse;font-size:0.85rem}
+.session-table th{text-align:left;padding:8px 12px;color:#8ab4f8;border-bottom:1px solid #1a5276;font-weight:600}
+.session-table td{padding:8px 12px;border-bottom:1px solid rgba(255,255,255,0.05);cursor:pointer;transition:background 0.15s}
+.session-table tr.clickable:hover td{background:#1a1a2e}
+.session-table tr.active-row td{background:#0f3460}
+.session-table .status-badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:0.72rem;font-weight:600}
+.session-table .status-badge.recording{background:rgba(68,255,68,0.15);color:#44FF44}
+.session-table .status-badge.ended{background:rgba(136,136,136,0.15);color:#888}
+.delete-btn{background:none;border:1px solid #c0392b;color:#c0392b;border-radius:6px;padding:3px 10px;font-size:0.75rem;cursor:pointer;transition:all 0.2s}
+.delete-btn:hover{background:#c0392b;color:#fff}
+
+/* Action buttons */
+.actions{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
+.btn{padding:8px 20px;border:none;border-radius:8px;font-size:0.85rem;cursor:pointer;font-weight:600;transition:opacity 0.2s,background 0.2s}
+.btn:active{opacity:0.7}
+.btn-export{background:#2980b9;color:#fff}
+.btn-export:hover{background:#3498db}
+.btn-json{background:#27ae60;color:#fff}
+.btn-json:hover{background:#2ecc71}
+
+/* Tooltip */
+.tooltip{position:absolute;background:#0f3460;border:1px solid #1a5276;border-radius:8px;padding:8px 12px;font-size:0.78rem;pointer-events:none;z-index:100;white-space:nowrap;box-shadow:0 4px 12px rgba(0,0,0,0.4);display:none}
+.tooltip .tt-rpm{font-size:1.1rem;font-weight:700;color:#C8D820;font-family:'Courier New',monospace}
+.tooltip .tt-type{font-weight:600;margin-top:2px}
+.tooltip .tt-time{color:#888;font-size:0.72rem;margin-top:2px}
+
+/* No data */
+.no-data{text-align:center;color:#555;padding:40px 0;font-size:0.9rem}
+
+/* Right column wrapper */
+.right-col{display:flex;flex-direction:column;gap:16px}
+</style>
+</head>
+<body>
+
+<div class="header">
+    <h1>网球旋转观测器</h1>
+    <div class="session-info">
+        <span class="status-dot ended" id="sessionDot"></span>
+        <span id="sessionText">未选择会话</span>
+    </div>
+</div>
+
+<div class="main">
+    <!-- Left column: Polar Plot -->
+    <div class="card">
+        <h2>旋转轴极坐标图</h2>
+        <div class="polar-container">
+            <svg id="polarSvg" viewBox="0 0 400 400" width="400" height="400"></svg>
+            <div class="legend" id="legend"></div>
+        </div>
+    </div>
+
+    <!-- Right column: Stats + Distribution -->
+    <div class="right-col">
+        <div class="card">
+            <h2>训练统计</h2>
+            <div class="stats-grid">
+                <div class="stat-box"><div class="stat-val" id="statTotal">0</div><div class="stat-lbl">击球数</div></div>
+                <div class="stat-box"><div class="stat-val" id="statAvgRPM">0</div><div class="stat-lbl">平均 RPM</div></div>
+                <div class="stat-box"><div class="stat-val" id="statMaxRPM">0</div><div class="stat-lbl">最高 RPM</div></div>
+                <div class="stat-box"><div class="stat-val" id="statMaxG">0</div><div class="stat-lbl">最大 G</div></div>
+            </div>
+        </div>
+        <div class="card">
+            <h2>旋转类型分布</h2>
+            <div class="dist-bar-wrap" id="distChart"></div>
+        </div>
+        <div class="actions">
+            <button class="btn btn-export" id="btnExportCSV" onclick="exportCSV()">导出 CSV</button>
+            <button class="btn btn-json" id="btnExportJSON" onclick="exportJSON()">导出 JSON</button>
+        </div>
+    </div>
+
+    <!-- Timeline -->
+    <div class="card timeline-section">
+        <h2>击球时间线</h2>
+        <div class="timeline-scroll">
+            <div class="timeline-bar" id="timelineBar"></div>
+        </div>
+    </div>
+
+    <!-- Session History -->
+    <div class="card history-section">
+        <h2>历史会话</h2>
+        <div id="sessionTableWrap"></div>
+    </div>
+</div>
+
+<!-- Tooltip element -->
+<div class="tooltip" id="tooltip">
+    <div class="tt-rpm"></div>
+    <div class="tt-type"></div>
+    <div class="tt-time"></div>
+</div>
+
+<script>
+'use strict';
+
+// ============================================================
+// Constants & State
+// ============================================================
+
+const SPIN_COLORS = {
+    TOPSPIN:  '#FF6B6B',
+    BACKSPIN: '#4ECDC4',
+    SIDE_L:   '#FFE66D',
+    SIDE_R:   '#FFE66D',
+    SIDESPIN: '#FFE66D',
+    SLICE:    '#A8E6CF',
+    FLAT:     '#888888',
+    MIXED:    '#DDA0DD'
+};
+
+const SPIN_LABELS = {
+    TOPSPIN:  '上旋',
+    BACKSPIN: '下旋',
+    SIDE_L:   '左侧旋',
+    SIDE_R:   '右侧旋',
+    SIDESPIN: '侧旋',
+    SLICE:    '切削',
+    FLAT:     '平击',
+    MIXED:    '混合'
+};
+
+const CX = 200, CY = 200, MAX_R = 170;
+const RPM_RINGS = [50, 100, 150, 200];
+
+let allSessions = [];
+let currentSessionId = null;
+let currentSession = null;
+let currentShots = [];
+let pollTimer = null;
+let hiddenTypes = new Set();
+let selectedShotIdx = -1;
+
+// ============================================================
+// SVG Namespace helper
+// ============================================================
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+function svgEl(tag, attrs) {
+    const el = document.createElementNS(SVG_NS, tag);
+    for (const [k, v] of Object.entries(attrs || {})) el.setAttribute(k, v);
+    return el;
+}
+
+// ============================================================
+// Initialize Polar Plot static elements
+// ============================================================
+
+function initPolarPlot() {
+    const svg = document.getElementById('polarSvg');
+    svg.innerHTML = '';
+
+    // Background
+    svg.appendChild(svgEl('rect', {x:0, y:0, width:400, height:400, fill:'#1a1a2e', rx:8}));
+
+    // Concentric RPM rings
+    const maxRPMRing = RPM_RINGS[RPM_RINGS.length - 1];
+    RPM_RINGS.forEach(rpm => {
+        const r = (rpm / maxRPMRing) * MAX_R;
+        svg.appendChild(svgEl('circle', {
+            cx: CX, cy: CY, r: r,
+            fill: 'none', stroke: '#333', 'stroke-width': 1,
+            'stroke-dasharray': '4,4'
+        }));
+        // RPM label
+        const label = svgEl('text', {
+            x: CX + 4, y: CY - r - 2,
+            fill: '#555', 'font-size': '10', 'font-family': 'Courier New, monospace'
+        });
+        label.textContent = rpm;
+        svg.appendChild(label);
+    });
+
+    // Cross-hair lines
+    svg.appendChild(svgEl('line', {x1: CX - MAX_R - 10, y1: CY, x2: CX + MAX_R + 10, y2: CY, stroke: '#333', 'stroke-width': 0.8}));
+    svg.appendChild(svgEl('line', {x1: CX, y1: CY - MAX_R - 10, x2: CX, y2: CY + MAX_R + 10, stroke: '#333', 'stroke-width': 0.8}));
+
+    // Axis labels
+    const labels = [
+        {text: '右侧旋', x: CX + MAX_R + 14, y: CY + 4, anchor: 'start'},   // 0 degrees
+        {text: '上旋',   x: CX, y: CY - MAX_R - 14, anchor: 'middle'},        // 90 degrees
+        {text: '左侧旋', x: CX - MAX_R - 14, y: CY + 4, anchor: 'end'},      // 180 degrees
+        {text: '下旋',   x: CX, y: CY + MAX_R + 22, anchor: 'middle'}         // 270 degrees
+    ];
+    labels.forEach(l => {
+        const t = svgEl('text', {
+            x: l.x, y: l.y,
+            fill: '#8ab4f8', 'font-size': '12', 'font-weight': '600',
+            'text-anchor': l.anchor, 'font-family': 'system-ui, sans-serif'
+        });
+        t.textContent = l.text;
+        svg.appendChild(t);
+    });
+
+    // Group for shot points (added on top)
+    svg.appendChild(svgEl('g', {id: 'shotPoints'}));
+}
+
+// ============================================================
+// Render shots on polar plot
+// ============================================================
+
+function renderPolarShots() {
+    const svg = document.getElementById('polarSvg');
+    let group = document.getElementById('shotPoints');
+    if (!group) {
+        group = svgEl('g', {id: 'shotPoints'});
+        svg.appendChild(group);
+    }
+    group.innerHTML = '';
+
+    if (!currentShots.length) return;
+
+    // Determine max RPM from data for scaling
+    let dataMaxRPM = 0;
+    currentShots.forEach(s => { if (s.rpm > dataMaxRPM) dataMaxRPM = s.rpm; });
+    const scaleRPM = Math.max(dataMaxRPM, RPM_RINGS[RPM_RINGS.length - 1]);
+
+    const lastIdx = currentShots.length - 1;
+
+    currentShots.forEach((shot, idx) => {
+        const type = shot.spin_type || 'MIXED';
+        if (hiddenTypes.has(type)) return;
+
+        const phi = shot.spin_axis_phi;
+        if (phi == null) return;
+
+        // phi: 0=right, 90=top, counterclockwise
+        // SVG: 0=right, positive angle goes clockwise, so we negate
+        const angleRad = phi * Math.PI / 180;
+        const rPx = (shot.rpm / scaleRPM) * MAX_R;
+
+        // In SVG, Y is inverted (positive goes down)
+        const px = CX + rPx * Math.cos(angleRad);
+        const py = CY - rPx * Math.sin(angleRad);
+
+        const color = SPIN_COLORS[type] || '#888';
+        const isLatest = (idx === lastIdx);
+        const isSelected = (idx === selectedShotIdx);
+        const radius = isLatest ? 8 : 6;
+
+        const circle = svgEl('circle', {
+            cx: px.toFixed(1),
+            cy: py.toFixed(1),
+            r: radius,
+            fill: color,
+            opacity: 0.85,
+            stroke: (isLatest || isSelected) ? '#fff' : 'none',
+            'stroke-width': (isLatest || isSelected) ? 2 : 0,
+            cursor: 'pointer',
+            'data-idx': idx
+        });
+
+        // Hover tooltip
+        circle.addEventListener('mouseenter', (e) => showTooltip(e, shot));
+        circle.addEventListener('mouseleave', hideTooltip);
+        circle.addEventListener('click', () => selectShot(idx));
+
+        group.appendChild(circle);
+    });
+}
+
+// ============================================================
+// Tooltip
+// ============================================================
+
+function showTooltip(e, shot) {
+    const tip = document.getElementById('tooltip');
+    const type = shot.spin_type || 'MIXED';
+    tip.querySelector('.tt-rpm').textContent = Math.round(shot.rpm) + ' RPM';
+    tip.querySelector('.tt-type').textContent = (SPIN_LABELS[type] || type);
+    tip.querySelector('.tt-type').style.color = SPIN_COLORS[type] || '#e0e0e0';
+    tip.querySelector('.tt-time').textContent = shot.local_ts || '';
+    tip.style.display = 'block';
+
+    const rect = document.body.getBoundingClientRect();
+    let tx = e.pageX + 12;
+    let ty = e.pageY - 10;
+    // Keep within viewport
+    if (tx + 160 > window.innerWidth) tx = e.pageX - 170;
+    if (ty < 0) ty = 10;
+    tip.style.left = tx + 'px';
+    tip.style.top = ty + 'px';
+}
+
+function hideTooltip() {
+    document.getElementById('tooltip').style.display = 'none';
+}
+
+// ============================================================
+// Legend / filter buttons
+// ============================================================
+
+function renderLegend() {
+    const el = document.getElementById('legend');
+    el.innerHTML = '';
+    const types = ['TOPSPIN', 'BACKSPIN', 'SIDE_L', 'SIDE_R', 'SLICE', 'FLAT', 'MIXED'];
+    types.forEach(t => {
+        const btn = document.createElement('div');
+        btn.className = 'legend-btn' + (hiddenTypes.has(t) ? ' hidden' : '');
+        btn.innerHTML = '<span class="legend-dot" style="background:' + SPIN_COLORS[t] + '"></span>' + (SPIN_LABELS[t] || t);
+        btn.addEventListener('click', () => {
+            if (hiddenTypes.has(t)) hiddenTypes.delete(t);
+            else hiddenTypes.add(t);
+            renderLegend();
+            renderPolarShots();
+        });
+        el.appendChild(btn);
+    });
+}
+
+// ============================================================
+// Stats
+// ============================================================
+
+function updateStats() {
+    const totalEl = document.getElementById('statTotal');
+    const avgEl = document.getElementById('statAvgRPM');
+    const maxEl = document.getElementById('statMaxRPM');
+    const maxGEl = document.getElementById('statMaxG');
+
+    if (!currentShots.length) {
+        totalEl.textContent = '0';
+        avgEl.textContent = '0';
+        maxEl.textContent = '0';
+        maxGEl.textContent = '0';
+        return;
+    }
+
+    let sumRPM = 0, mxRPM = 0, mxG = 0;
+    currentShots.forEach(s => {
+        sumRPM += (s.rpm || 0);
+        if (s.rpm > mxRPM) mxRPM = s.rpm;
+        if (s.peak_g > mxG) mxG = s.peak_g;
+    });
+
+    totalEl.textContent = currentShots.length;
+    avgEl.textContent = Math.round(sumRPM / currentShots.length);
+    maxEl.textContent = Math.round(mxRPM);
+    maxGEl.textContent = mxG.toFixed(1);
+}
+
+// ============================================================
+// Spin Distribution Chart
+// ============================================================
+
+function updateDistribution() {
+    const wrap = document.getElementById('distChart');
+    wrap.innerHTML = '';
+
+    if (!currentShots.length) {
+        wrap.innerHTML = '<div class="no-data">暂无数据</div>';
+        return;
+    }
+
+    // Count types
+    const counts = {};
+    currentShots.forEach(s => {
+        const t = s.spin_type || 'MIXED';
+        counts[t] = (counts[t] || 0) + 1;
+    });
+
+    // Sort by count descending
+    const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+    const total = currentShots.length;
+
+    sorted.forEach(([type, count]) => {
+        const pct = (count / total * 100);
+        const row = document.createElement('div');
+        row.className = 'dist-row';
+        row.innerHTML =
+            '<div class="dist-label">' + (SPIN_LABELS[type] || type) + '</div>' +
+            '<div class="dist-bar-bg"><div class="dist-bar-fill" style="width:' + pct.toFixed(1) + '%;background:' + (SPIN_COLORS[type] || '#888') + '"></div></div>' +
+            '<div class="dist-pct">' + pct.toFixed(0) + '%</div>';
+        wrap.appendChild(row);
+    });
+}
+
+// ============================================================
+// Shot Timeline
+// ============================================================
+
+function renderTimeline() {
+    const bar = document.getElementById('timelineBar');
+    bar.innerHTML = '';
+
+    if (!currentShots.length) {
+        bar.style.width = '100%';
+        bar.innerHTML = '<div class="no-data" style="line-height:80px">暂无击球数据</div>';
+        return;
+    }
+
+    const barW = Math.max(currentShots.length * 50, bar.parentElement.clientWidth);
+    bar.style.width = barW + 'px';
+
+    const firstTs = currentShots[0].device_ts || 0;
+    const lastTs = currentShots[currentShots.length - 1].device_ts || 0;
+    const timeSpan = Math.max(lastTs - firstTs, 1);
+
+    currentShots.forEach((s, i) => {
+        const pct = currentShots.length === 1 ? 0.5 : (s.device_ts - firstTs) / timeSpan;
+        const x = 20 + pct * (barW - 40);
+        const type = s.spin_type || 'MIXED';
+        const color = SPIN_COLORS[type] || '#888';
+
+        const mk = document.createElement('div');
+        mk.className = 'shot-mark' + (i === selectedShotIdx ? ' selected' : '');
+        mk.style.left = x + 'px';
+        mk.addEventListener('click', () => selectShot(i));
+
+        mk.innerHTML =
+            '<div class="shot-dot" style="background:' + color + '"></div>' +
+            '<div class="shot-rpm">' + Math.round(s.rpm) + '</div>' +
+            '<div class="shot-type-label sc-' + type + '">' + (SPIN_LABELS[type] || type) + '</div>';
+
+        bar.appendChild(mk);
+    });
+}
+
+function selectShot(idx) {
+    selectedShotIdx = idx;
+    renderPolarShots();
+    renderTimeline();
+}
+
+// ============================================================
+// Session History Table
+// ============================================================
+
+function renderSessionTable() {
+    const wrap = document.getElementById('sessionTableWrap');
+
+    if (!allSessions.length) {
+        wrap.innerHTML = '<div class="no-data">暂无会话记录</div>';
+        return;
+    }
+
+    let html = '<table class="session-table"><thead><tr>' +
+        '<th>#</th><th>开始时间</th><th>状态</th><th>时长</th><th>击球</th><th>平均RPM</th><th>最高RPM</th><th>操作</th>' +
+        '</tr></thead><tbody>';
+
+    allSessions.forEach(s => {
+        const isActive = (currentSessionId === s.id);
+        const isRecording = !s.end_time;
+        const startStr = s.start_time ? s.start_time.replace('T', ' ').substring(0, 19) : '-';
+        const durStr = s.duration_sec ? formatDuration(s.duration_sec) : (isRecording ? '录制中' : '-');
+        const statusBadge = isRecording
+            ? '<span class="status-badge recording">录制中</span>'
+            : '<span class="status-badge ended">已结束</span>';
+
+        html += '<tr class="clickable' + (isActive ? ' active-row' : '') + '" data-sid="' + s.id + '">' +
+            '<td>' + s.id + '</td>' +
+            '<td>' + startStr + '</td>' +
+            '<td>' + statusBadge + '</td>' +
+            '<td>' + durStr + '</td>' +
+            '<td>' + (s.total_shots || 0) + '</td>' +
+            '<td>' + Math.round(s.avg_rpm || 0) + '</td>' +
+            '<td>' + Math.round(s.max_rpm || 0) + '</td>' +
+            '<td><button class="delete-btn" data-sid="' + s.id + '">删除</button></td>' +
+            '</tr>';
+    });
+
+    html += '</tbody></table>';
+    wrap.innerHTML = html;
+
+    // Attach click handlers to rows
+    wrap.querySelectorAll('tr.clickable').forEach(row => {
+        row.addEventListener('click', (e) => {
+            if (e.target.classList.contains('delete-btn')) return;
+            const sid = parseInt(row.dataset.sid);
+            loadSession(sid);
+        });
+    });
+
+    // Attach delete handlers
+    wrap.querySelectorAll('.delete-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const sid = parseInt(btn.dataset.sid);
+            deleteSession(sid);
+        });
+    });
+}
+
+function formatDuration(sec) {
+    if (sec < 60) return Math.round(sec) + '秒';
+    const m = Math.floor(sec / 60);
+    const s = Math.round(sec % 60);
+    if (m < 60) return m + '分' + (s > 0 ? s + '秒' : '');
+    const h = Math.floor(m / 60);
+    const rm = m % 60;
+    return h + '时' + (rm > 0 ? rm + '分' : '');
+}
+
+// ============================================================
+// API calls
+// ============================================================
+
+async function fetchSessions() {
+    try {
+        const resp = await fetch('/api/sessions');
+        allSessions = await resp.json();
+    } catch (e) {
+        console.error('Failed to fetch sessions:', e);
+        allSessions = [];
+    }
+}
+
+async function loadSession(sid) {
+    currentSessionId = sid;
+    selectedShotIdx = -1;
+
+    // Stop any existing poll
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+
+    try {
+        // Fetch session detail and shots in parallel
+        const [sessionResp, shotsResp] = await Promise.all([
+            fetch('/api/sessions/' + sid),
+            fetch('/api/sessions/' + sid + '/shots')
+        ]);
+
+        currentSession = await sessionResp.json();
+        currentShots = await shotsResp.json();
+    } catch (e) {
+        console.error('Failed to load session:', e);
+        return;
+    }
+
+    // Update session header
+    updateSessionHeader();
+
+    // Render everything
+    renderPolarShots();
+    updateStats();
+    updateDistribution();
+    renderTimeline();
+    renderSessionTable();
+
+    // If session is still active (no end_time), poll for updates
+    if (currentSession && !currentSession.end_time) {
+        pollTimer = setInterval(() => pollShots(sid), 2000);
+    }
+}
+
+async function pollShots(sid) {
+    // Only poll if this is still the active session
+    if (currentSessionId !== sid) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+        return;
+    }
+
+    try {
+        const [sessionResp, shotsResp] = await Promise.all([
+            fetch('/api/sessions/' + sid),
+            fetch('/api/sessions/' + sid + '/shots')
+        ]);
+        currentSession = await sessionResp.json();
+        const newShots = await shotsResp.json();
+
+        // Only re-render if shot count changed
+        if (newShots.length !== currentShots.length) {
+            currentShots = newShots;
+            renderPolarShots();
+            updateStats();
+            updateDistribution();
+            renderTimeline();
+        }
+
+        // Update session header (sample count may change)
+        updateSessionHeader();
+
+        // If session ended, stop polling and refresh session list
+        if (currentSession.end_time) {
+            clearInterval(pollTimer);
+            pollTimer = null;
+            await fetchSessions();
+            renderSessionTable();
+        }
+    } catch (e) {
+        console.error('Poll error:', e);
+    }
+}
+
+function updateSessionHeader() {
+    const dot = document.getElementById('sessionDot');
+    const txt = document.getElementById('sessionText');
+
+    if (!currentSession) {
+        dot.className = 'status-dot ended';
+        txt.textContent = '未选择会话';
+        return;
+    }
+
+    const isRecording = !currentSession.end_time;
+    dot.className = 'status-dot ' + (isRecording ? 'active' : 'ended');
+
+    const samples = currentSession.total_samples || 0;
+    const statusStr = isRecording ? '录制中' : '已结束';
+    txt.textContent = '会话 #' + currentSession.id + ' (' + statusStr + ') - ' + samples + ' 条数据';
+}
+
+async function deleteSession(sid) {
+    if (!confirm('确定要删除会话 #' + sid + ' 及其所有数据吗？')) return;
+
+    try {
+        await fetch('/api/sessions/' + sid, { method: 'DELETE' });
+    } catch (e) {
+        console.error('Delete failed:', e);
+        return;
+    }
+
+    // If we deleted the current session, clear the view
+    if (currentSessionId === sid) {
+        currentSessionId = null;
+        currentSession = null;
+        currentShots = [];
+        selectedShotIdx = -1;
+        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+        updateSessionHeader();
+        renderPolarShots();
+        updateStats();
+        updateDistribution();
+        renderTimeline();
+    }
+
+    // Refresh session list
+    await fetchSessions();
+    renderSessionTable();
+}
+
+// ============================================================
+// Export functions
+// ============================================================
+
+function exportCSV() {
+    if (!currentSessionId) { alert('请先选择一个会话'); return; }
+    window.open('/api/sessions/' + currentSessionId + '/export', '_blank');
+}
+
+function exportJSON() {
+    if (!currentSessionId) { alert('请先选择一个会话'); return; }
+
+    const data = {
+        session: currentSession,
+        shots: currentShots
+    };
+
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'session_' + currentSessionId + '.json';
+    a.click();
+    URL.revokeObjectURL(a.href);
+}
+
+// ============================================================
+// Initialization
+// ============================================================
+
+async function init() {
+    initPolarPlot();
+    renderLegend();
+
+    await fetchSessions();
+    renderSessionTable();
+
+    // Auto-load the latest session if available
+    if (allSessions.length > 0) {
+        await loadSession(allSessions[0].id);
+    } else {
+        updateStats();
+        updateDistribution();
+        renderTimeline();
+    }
+}
+
+init();
+</script>
+</body>
+</html>
