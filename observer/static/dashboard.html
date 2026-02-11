@@ -389,12 +389,17 @@ function getIcoMid(i, j) {
 
 const icoEdges = [];
 const edgeSet = new Set();
-const subdFaces = [];
-for (const [a,b,c] of icoFaces) {
-  const ab = getIcoMid(a,b), bc = getIcoMid(b,c), ca = getIcoMid(c,a);
-  subdFaces.push([a,ab,ca],[b,bc,ab],[c,ca,bc],[ab,bc,ca]);
+// Subdivide TWICE for denser mesh (~480 edges)
+let icoFacesCur = icoFaces;
+for (let sub = 0; sub < 2; sub++) {
+  const nf = [];
+  for (const [a,b,c] of icoFacesCur) {
+    const ab = getIcoMid(a,b), bc = getIcoMid(b,c), ca = getIcoMid(c,a);
+    nf.push([a,ab,ca],[b,bc,ab],[c,ca,bc],[ab,bc,ca]);
+  }
+  icoFacesCur = nf;
 }
-for (const [a,b,c] of subdFaces) {
+for (const [a,b,c] of icoFacesCur) {
   [[a,b],[b,c],[c,a]].forEach(([i,j]) => {
     const key = Math.min(i,j) + ':' + Math.max(i,j);
     if (!edgeSet.has(key)) { edgeSet.add(key); icoEdges.push([i,j]); }
@@ -602,7 +607,7 @@ function drawBall() {
         const proj = project(rotated);
         seamPoints.push(proj);
     }
-    drawLineStrip(ctx, seamPoints, 2.5, true);
+    drawLineStrip(ctx, seamPoints, 4, true);
 }
 
 function drawLineStrip(ctx, points, lineWidth, isSeam) {

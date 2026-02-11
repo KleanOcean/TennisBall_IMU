@@ -95,9 +95,9 @@ body{background:#0a0e27;color:#fff;font-family:system-ui,-apple-system,sans-seri
 .sd-grid{grid-template-columns:repeat(2,1fr)}
 }
 .mobile-rpm{display:none;text-align:center;padding:10px 0}
-.mrpm-val{font-size:3rem;font-weight:800;color:#C8D820;font-family:'Courier New',monospace;line-height:1}
-.mrpm-unit{font-size:.8rem;color:#667788;letter-spacing:2px;margin-top:2px}
-.mrpm-spin{font-size:.95rem;font-weight:600;color:#fff;margin-top:6px}
+.mrpm-val{font-size:4.5rem;font-weight:900;color:#C8D820;font-family:'Courier New',monospace;line-height:1;text-shadow:0 0 20px rgba(200,216,32,0.3)}
+.mrpm-unit{font-size:1.8rem;font-weight:700;color:#C8D820;letter-spacing:3px;display:inline}
+.mrpm-spin{font-size:1.1rem;font-weight:600;color:#99aa88;margin-top:8px;letter-spacing:2px;text-transform:uppercase}
 @media(max-width:768px){.mobile-rpm{display:block}}
 </style>
 </head>
@@ -137,8 +137,7 @@ body{background:#0a0e27;color:#fff;font-family:system-ui,-apple-system,sans-seri
 <button id="ballToggle" class="ball-toggle" onclick="toggleBallMode()">WIRE</button>
 </div>
 <div class="mobile-rpm" id="mobileRpm">
-<div class="mrpm-val" id="mRpmVal">0</div>
-<div class="mrpm-unit">RPM</div>
+<div><span class="mrpm-val" id="mRpmVal">0</span> <span class="mrpm-unit">RPM</span></div>
 <div class="mrpm-spin" id="mSpinType">---</div>
 </div>
 </div>
@@ -205,14 +204,19 @@ return midCache[key];
 }
 const geoVerts=[...icoVn];
 const geoEdges=new Set();
-const newFaces=[];
-for(const [a,b,c] of icoF){
+/* Subdivide TWICE for denser mesh (~480 edges) */
+let faces=icoF;
+for(let sub=0;sub<2;sub++){
+const nf=[];
+for(const [a,b,c] of faces){
 const ab=getMid(a,b,geoVerts);
 const bc=getMid(b,c,geoVerts);
 const ca=getMid(c,a,geoVerts);
-newFaces.push([a,ab,ca],[b,bc,ab],[c,ca,bc],[ab,bc,ca]);
+nf.push([a,ab,ca],[b,bc,ab],[c,ca,bc],[ab,bc,ca]);
 }
-for(const [a,b,c] of newFaces){
+faces=nf;
+}
+for(const [a,b,c] of faces){
 [[a,b],[b,c],[c,a]].forEach(([i,j])=>{
 const key=Math.min(i,j)+':'+Math.max(i,j);
 geoEdges.add(key);
@@ -392,8 +396,10 @@ ctx.beginPath();
 ctx.moveTo(p0.sx,p0.sy);
 ctx.lineTo(p1.sx,p1.sy);
 ctx.strokeStyle='rgba(200,216,32,'+a.toFixed(2)+')';
-ctx.lineWidth=2.5;
+ctx.lineWidth=4;
+if(zAvg/R>0.2){ctx.shadowColor='rgba(200,216,32,0.3)';ctx.shadowBlur=6;}
 ctx.stroke();
+ctx.shadowBlur=0;ctx.shadowColor='transparent';
 }
 }
 
@@ -487,8 +493,25 @@ const s=Math.round(secBack*(1-i/4));
 ctx.fillText(s+'s',x,pad.t+ph+14);
 }
 
-/* RPM line */
+/* RPM line + gradient fill below */
 if(rpmHist.length>1){
+/* Gradient fill area under the curve */
+ctx.beginPath();
+for(let i=0;i<rpmHist.length;i++){
+const x=pad.l+(i/(HIST_LEN-1))*pw;
+const y=pad.t+ph*(1-rpmHist[i]/yMax);
+i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+}
+ctx.lineTo(pad.l+((rpmHist.length-1)/(HIST_LEN-1))*pw,pad.t+ph);
+ctx.lineTo(pad.l,pad.t+ph);
+ctx.closePath();
+const gf=ctx.createLinearGradient(0,pad.t,0,pad.t+ph);
+gf.addColorStop(0,'rgba(200,216,32,0.25)');
+gf.addColorStop(0.5,'rgba(200,216,32,0.08)');
+gf.addColorStop(1,'rgba(200,216,32,0)');
+ctx.fillStyle=gf;
+ctx.fill();
+/* Line stroke on top */
 ctx.beginPath();
 ctx.strokeStyle='#C8D820';
 ctx.lineWidth=1.8;
