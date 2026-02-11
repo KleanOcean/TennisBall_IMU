@@ -26,8 +26,7 @@ body{background:var(--bg);color:var(--text-primary);font-family:system-ui,-apple
 .nav-tabs::-webkit-scrollbar{display:none}
 .nav-tab{padding:10px 20px;font-size:0.82rem;font-weight:700;color:var(--text-secondary);cursor:pointer;border:none;background:none;letter-spacing:1.5px;white-space:nowrap;position:relative;transition:color 0.2s}
 .nav-tab:hover{color:#aabbcc}
-.nav-tab.active{color:var(--accent)}
-.nav-tab.active::after{content:'';position:absolute;bottom:0;left:20%;right:20%;height:2px;background:var(--accent);border-radius:1px}
+.nav-tab.active{background:#fff;color:#0a0e27;border-radius:20px}
 .session-indicator{display:flex;align-items:center;gap:8px;font-size:0.82rem;color:var(--text-secondary);flex-shrink:0;margin-left:auto}
 .status-dot{width:9px;height:9px;border-radius:50%;display:inline-block;transition:background 0.3s}
 .status-dot.active{background:#44FF44;box-shadow:0 0 6px #44FF44;animation:pulse 1.5s infinite}
@@ -58,7 +57,7 @@ body{background:var(--bg);color:var(--text-primary);font-family:system-ui,-apple
 /* -- 3D Ball Column -- */
 .col-center{display:flex;flex-direction:column;align-items:center}
 .ball-glow-wrap{position:relative;display:flex;align-items:center;justify-content:center}
-.ball-glow{position:absolute;width:60%;height:60%;border-radius:50%;background:radial-gradient(circle,var(--glow) 0%,transparent 70%);filter:blur(30px);pointer-events:none}
+.ball-glow{position:absolute;width:75%;height:75%;border-radius:50%;background:radial-gradient(circle,rgba(200,216,32,0.38) 0%,rgba(200,216,32,0.12) 40%,transparent 70%);filter:blur(35px);pointer-events:none;opacity:0.9}
 #ballCanvas{position:relative;z-index:1;max-width:100%;height:auto}
 .ball-label{margin-top:10px;font-size:0.75rem;color:var(--text-secondary);text-align:center;letter-spacing:1px}
 
@@ -358,6 +357,51 @@ let ballAnimFrame = null;
 let ballMode = (typeof sessionStorage !== 'undefined' && sessionStorage.getItem('ballMode')) || 'wire';
 
 // ============================================================
+// Icosphere generation (once at startup)
+// ============================================================
+
+const ICO_PHI = (1 + Math.sqrt(5)) / 2;
+const icoBaseV = [[-1,ICO_PHI,0],[1,ICO_PHI,0],[-1,-ICO_PHI,0],[1,-ICO_PHI,0],
+  [0,-1,ICO_PHI],[0,1,ICO_PHI],[0,-1,-ICO_PHI],[0,1,-ICO_PHI],
+  [ICO_PHI,0,-1],[ICO_PHI,0,1],[-ICO_PHI,0,-1],[-ICO_PHI,0,1]];
+const icoVerts = icoBaseV.map(v => {
+  const l = Math.sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
+  return { x: v[0]/l, y: v[1]/l, z: v[2]/l };
+});
+
+const icoFaces = [[0,11,5],[0,5,1],[0,1,7],[0,7,10],[0,10,11],
+  [1,5,9],[5,11,4],[11,10,2],[10,7,6],[7,1,8],
+  [3,9,4],[3,4,2],[3,2,6],[3,6,8],[3,8,9],
+  [4,9,5],[2,4,11],[6,2,10],[8,6,7],[9,8,1]];
+
+// Subdivide once
+const midCache = {};
+function getIcoMid(i, j) {
+  const key = Math.min(i,j) + ':' + Math.max(i,j);
+  if (midCache[key] !== undefined) return midCache[key];
+  const a = icoVerts[i], b = icoVerts[j];
+  const mx = (a.x+b.x)/2, my = (a.y+b.y)/2, mz = (a.z+b.z)/2;
+  const l = Math.sqrt(mx*mx + my*my + mz*mz);
+  icoVerts.push({ x: mx/l, y: my/l, z: mz/l });
+  midCache[key] = icoVerts.length - 1;
+  return midCache[key];
+}
+
+const icoEdges = [];
+const edgeSet = new Set();
+const subdFaces = [];
+for (const [a,b,c] of icoFaces) {
+  const ab = getIcoMid(a,b), bc = getIcoMid(b,c), ca = getIcoMid(c,a);
+  subdFaces.push([a,ab,ca],[b,bc,ab],[c,ca,bc],[ab,bc,ca]);
+}
+for (const [a,b,c] of subdFaces) {
+  [[a,b],[b,c],[c,a]].forEach(([i,j]) => {
+    const key = Math.min(i,j) + ':' + Math.max(i,j);
+    if (!edgeSet.has(key)) { edgeSet.add(key); icoEdges.push([i,j]); }
+  });
+}
+
+// ============================================================
 // Tab Switching
 // ============================================================
 
@@ -518,36 +562,30 @@ function drawBall() {
         return { sx: cx + p.x, sy: cy - p.y, depth: p.z / R };
     }
 
-    // Draw longitude lines
-    for (let phiDeg = 0; phiDeg < 360; phiDeg += 30) {
-        const phi = phiDeg * Math.PI / 180;
-        const points = [];
-        for (let thetaDeg = 0; thetaDeg <= 180; thetaDeg += 6) {
-            const theta = thetaDeg * Math.PI / 180;
-            const x = R * Math.sin(theta) * Math.cos(phi);
-            const y = R * Math.sin(theta) * Math.sin(phi);
-            const z = R * Math.cos(theta);
-            const rotated = rotate(x, y, z);
-            const proj = project(rotated);
-            points.push(proj);
-        }
-        drawLineStrip(ctx, points, 1);
-    }
+    // Multi-layer glow
+    const glowGrad = ctx.createRadialGradient(cx, cy, R * 0.2, cx, cy, R * 1.5);
+    glowGrad.addColorStop(0, 'rgba(200,216,32,0.15)');
+    glowGrad.addColorStop(0.4, 'rgba(200,216,32,0.08)');
+    glowGrad.addColorStop(0.7, 'rgba(200,216,32,0.03)');
+    glowGrad.addColorStop(1, 'rgba(200,216,32,0)');
+    ctx.fillStyle = glowGrad;
+    ctx.fillRect(0, 0, w, h);
 
-    // Draw latitude lines
-    for (let thetaDeg = 30; thetaDeg <= 150; thetaDeg += 30) {
-        const theta = thetaDeg * Math.PI / 180;
-        const points = [];
-        for (let phiDeg = 0; phiDeg <= 360; phiDeg += 6) {
-            const phi = phiDeg * Math.PI / 180;
-            const x = R * Math.sin(theta) * Math.cos(phi);
-            const y = R * Math.sin(theta) * Math.sin(phi);
-            const z = R * Math.cos(theta);
-            const rotated = rotate(x, y, z);
-            const proj = project(rotated);
-            points.push(proj);
-        }
-        drawLineStrip(ctx, points, 1);
+    // Draw geodesic mesh edges
+    for (const [i, j] of icoEdges) {
+      const va = icoVerts[i], vb = icoVerts[j];
+      // Apply rotation
+      const ra = rotate(va.x * R, va.y * R, va.z * R);
+      const rb = rotate(vb.x * R, vb.y * R, vb.z * R);
+      const pa = project(ra), pb = project(rb);
+      const avgDepth = (pa.depth + pb.depth) / 2;
+      const alpha = 0.10 + 0.90 * Math.max(0, avgDepth);
+      ctx.beginPath();
+      ctx.moveTo(pa.sx, pa.sy);
+      ctx.lineTo(pb.sx, pb.sy);
+      ctx.strokeStyle = 'rgba(200,216,32,' + alpha.toFixed(2) + ')';
+      ctx.lineWidth = 0.8;
+      ctx.stroke();
     }
 
     // Tennis ball seam curve

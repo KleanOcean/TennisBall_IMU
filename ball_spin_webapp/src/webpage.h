@@ -15,7 +15,7 @@ body{background:#0a0e27;color:#fff;font-family:system-ui,-apple-system,sans-seri
 .tabs{display:flex;gap:4px}
 .tab{padding:7px 18px;border:none;background:transparent;color:#667788;font-size:.78rem;font-weight:600;cursor:pointer;border-radius:6px;letter-spacing:1px;text-transform:uppercase;transition:all .2s}
 .tab:hover{color:#aab}
-.tab.active{background:#1a1f44;color:#C8D820}
+.tab.active{background:#fff;color:#0a0e27}
 .conn{margin-left:auto;display:flex;align-items:center;gap:7px;font-size:.78rem;color:#667788}
 .conn-dot{width:8px;height:8px;border-radius:50%;transition:background .3s}
 .conn-dot.on{background:#44FF44;box-shadow:0 0 6px #44FF44}
@@ -94,6 +94,11 @@ body{background:#0a0e27;color:#fff;font-family:system-ui,-apple-system,sans-seri
 .stat-row{grid-template-columns:repeat(2,1fr)}
 .sd-grid{grid-template-columns:repeat(2,1fr)}
 }
+.mobile-rpm{display:none;text-align:center;padding:10px 0}
+.mrpm-val{font-size:3rem;font-weight:800;color:#C8D820;font-family:'Courier New',monospace;line-height:1}
+.mrpm-unit{font-size:.8rem;color:#667788;letter-spacing:2px;margin-top:2px}
+.mrpm-spin{font-size:.95rem;font-weight:600;color:#fff;margin-top:6px}
+@media(max-width:768px){.mobile-rpm{display:block}}
 </style>
 </head>
 <body>
@@ -130,6 +135,11 @@ body{background:#0a0e27;color:#fff;font-family:system-ui,-apple-system,sans-seri
 <div class="card ball-card" style="position:relative">
 <canvas id="ballCv" width="350" height="350"></canvas>
 <button id="ballToggle" class="ball-toggle" onclick="toggleBallMode()">WIRE</button>
+</div>
+<div class="mobile-rpm" id="mobileRpm">
+<div class="mrpm-val" id="mRpmVal">0</div>
+<div class="mrpm-unit">RPM</div>
+<div class="mrpm-spin" id="mSpinType">---</div>
 </div>
 </div>
 <div class="col">
@@ -171,6 +181,44 @@ const HIST_LEN=250,MAX_RPM=3000;
 const SEAM_N=72,SEAM_AMP=0.44;
 const seamPts=[];
 for(let i=0;i<SEAM_N;i++){const t=2*Math.PI*i/SEAM_N;const lat=SEAM_AMP*Math.sin(2*t);seamPts.push({x:Math.cos(lat)*Math.cos(t),y:Math.cos(lat)*Math.sin(t),z:Math.sin(lat)});}
+
+/* Generate icosphere vertices and edges */
+const PHI=(1+Math.sqrt(5))/2;
+const icoV=[[-1,PHI,0],[1,PHI,0],[-1,-PHI,0],[1,-PHI,0],
+[0,-1,PHI],[0,1,PHI],[0,-1,-PHI],[0,1,-PHI],
+[PHI,0,-1],[PHI,0,1],[-PHI,0,-1],[-PHI,0,1]];
+const icoVn=icoV.map(v=>{const l=Math.sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2]);return{x:v[0]/l,y:v[1]/l,z:v[2]/l};});
+const icoF=[[0,11,5],[0,5,1],[0,1,7],[0,7,10],[0,10,11],
+[1,5,9],[5,11,4],[11,10,2],[10,7,6],[7,1,8],
+[3,9,4],[3,4,2],[3,2,6],[3,6,8],[3,8,9],
+[4,9,5],[2,4,11],[6,2,10],[8,6,7],[9,8,1]];
+const midCache={};
+function getMid(i,j,verts){
+const key=Math.min(i,j)+':'+Math.max(i,j);
+if(midCache[key]!==undefined) return midCache[key];
+const a=verts[i],b=verts[j];
+const mx=(a.x+b.x)/2,my=(a.y+b.y)/2,mz=(a.z+b.z)/2;
+const l=Math.sqrt(mx*mx+my*my+mz*mz);
+verts.push({x:mx/l,y:my/l,z:mz/l});
+midCache[key]=verts.length-1;
+return midCache[key];
+}
+const geoVerts=[...icoVn];
+const geoEdges=new Set();
+const newFaces=[];
+for(const [a,b,c] of icoF){
+const ab=getMid(a,b,geoVerts);
+const bc=getMid(b,c,geoVerts);
+const ca=getMid(c,a,geoVerts);
+newFaces.push([a,ab,ca],[b,bc,ab],[c,ca,bc],[ab,bc,ca]);
+}
+for(const [a,b,c] of newFaces){
+[[a,b],[b,c],[c,a]].forEach(([i,j])=>{
+const key=Math.min(i,j)+':'+Math.max(i,j);
+geoEdges.add(key);
+});
+}
+const edgeList=[...geoEdges].map(k=>{const [i,j]=k.split(':').map(Number);return[i,j];});
 
 let ws=null,connected=false;
 let quat={w:1,x:0,y:0,z:0},rpm=0;
@@ -305,54 +353,28 @@ const w=350,h=350,cx=w/2,cy=h/2,R=140;
 const ctx=ballCtx;
 ctx.clearRect(0,0,w,h);
 
-/* Glow behind ball */
-const grd=ctx.createRadialGradient(cx,cy,R*0.3,cx,cy,R*1.3);
-grd.addColorStop(0,'rgba(200,216,32,0.08)');
-grd.addColorStop(0.6,'rgba(200,216,32,0.03)');
+/* Multi-layer glow */
+const grd=ctx.createRadialGradient(cx,cy,R*0.2,cx,cy,R*1.5);
+grd.addColorStop(0,'rgba(200,216,32,0.15)');
+grd.addColorStop(0.4,'rgba(200,216,32,0.08)');
+grd.addColorStop(0.7,'rgba(200,216,32,0.03)');
 grd.addColorStop(1,'rgba(200,216,32,0)');
 ctx.fillStyle=grd;
 ctx.fillRect(0,0,w,h);
 
-const DEG=Math.PI/180;
-
-/* Helper: draw line strip with depth-based opacity */
-function drawStrip(pts,lw,base){
-for(let i=1;i<pts.length;i++){
-const p0=pts[i-1],p1=pts[i];
-const zAvg=(p0.z+p1.z)/2;
-const a=0.12+0.88*Math.max(0,zAvg/R);
+/* Draw geodesic mesh edges */
+for(const [i,j] of edgeList){
+const va=qrot(quat,geoVerts[i]);
+const vb=qrot(quat,geoVerts[j]);
+const za=va.z,zb=vb.z;
+const zAvg=(za+zb)/2;
+const a=0.10+0.90*Math.max(0,zAvg);
 ctx.beginPath();
-ctx.moveTo(p0.sx,p0.sy);
-ctx.lineTo(p1.sx,p1.sy);
-ctx.strokeStyle=base?base:'rgba(200,216,32,'+a.toFixed(2)+')';
-if(!base)ctx.strokeStyle='rgba(200,216,32,'+a.toFixed(2)+')';
-ctx.lineWidth=lw;
+ctx.moveTo(cx+va.x*R,cy-va.y*R);
+ctx.lineTo(cx+vb.x*R,cy-vb.y*R);
+ctx.strokeStyle='rgba(200,216,32,'+a.toFixed(2)+')';
+ctx.lineWidth=0.8;
 ctx.stroke();
-}
-}
-
-/* Longitude lines (12 lines, every 30 deg) */
-for(let phi=0;phi<360;phi+=30){
-const pts=[];
-for(let th=0;th<=180;th+=8){
-const tr=th*DEG,pr=phi*DEG;
-const v={x:Math.sin(tr)*Math.cos(pr),y:Math.sin(tr)*Math.sin(pr),z:Math.cos(tr)};
-const rv=qrot(quat,v);
-pts.push({sx:cx+rv.x*R,sy:cy-rv.y*R,z:rv.z*R});
-}
-drawStrip(pts,0.8);
-}
-
-/* Latitude lines (5 rings at 30,60,90,120,150) */
-for(let th=30;th<=150;th+=30){
-const pts=[];
-for(let phi=0;phi<=360;phi+=8){
-const tr=th*DEG,pr=phi*DEG;
-const v={x:Math.sin(tr)*Math.cos(pr),y:Math.sin(tr)*Math.sin(pr),z:Math.cos(tr)};
-const rv=qrot(quat,v);
-pts.push({sx:cx+rv.x*R,sy:cy-rv.y*R,z:rv.z*R});
-}
-drawStrip(pts,0.8);
 }
 
 /* Seam curve (thicker) */
@@ -591,6 +613,10 @@ drawBall();
 drawGauge();
 drawRpmChart();
 if(!connected)spinType.textContent=classifySpin(gx,gy,gz);
+const me=document.getElementById('mRpmVal');
+if(me)me.textContent=Math.round(rpm);
+const ms=document.getElementById('mSpinType');
+if(ms)ms.textContent=document.getElementById('spinType').textContent;
 }
 
 document.getElementById('ballToggle').textContent=ballMode==='wire'?'WIRE':'SOLID';
