@@ -261,41 +261,147 @@ void enterLightSleep() {
     // === Execution resumes here after wake ===
 }
 
+void playSunriseAnimation() {
+    // Sunrise animation: ~1.2 seconds, sun (yellow-green ball) rises from sea
+    const int FRAMES = 36;        // 36 frames at ~33ms = ~1.2s
+    const int16_t SEA_Y = 90;     // sea surface Y position
+    const int16_t SUN_START_Y = SEA_Y + 30;  // sun starts below sea
+    const int16_t SUN_END_Y = BALL_CY;       // sun ends at normal ball center
+    const int16_t SUN_R_START = 15;
+    const int16_t SUN_R_END = BALL_R;
+
+    for (int f = 0; f < FRAMES; f++) {
+        float t = (float)f / (float)(FRAMES - 1);  // 0.0 → 1.0
+
+        // Ease-out curve: fast start, gentle arrival
+        float ease = 1.0f - (1.0f - t) * (1.0f - t);
+
+        canvas.fillSprite(TFT_BLACK);
+
+        // --- Sky gradient (dark blue → slightly lighter at horizon) ---
+        for (int16_t y = 0; y < SEA_Y; y++) {
+            float skyT = (float)y / (float)SEA_Y;
+            // Blend from deep navy (top) to slightly brighter blue (horizon)
+            uint8_t r = (uint8_t)(skyT * 8);
+            uint8_t g = (uint8_t)(4 + skyT * 16);
+            uint8_t b = (uint8_t)(16 + skyT * 40);
+            uint16_t col = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
+            canvas.drawFastHLine(0, y, W, col);
+        }
+
+        // --- Sea (dark teal, below SEA_Y) ---
+        for (int16_t y = SEA_Y; y < H; y++) {
+            int depth = y - SEA_Y;
+            uint16_t col;
+            if (depth < 2) col = 0x0597;      // bright sea surface
+            else if (depth < 10) col = 0x0293; // mid teal
+            else col = 0x0172;                  // deep dark
+            canvas.drawFastHLine(0, y, W, col);
+        }
+        // Sea surface highlight
+        canvas.drawFastHLine(0, SEA_Y, W, 0x0597);
+
+        // --- Sun position and size ---
+        int16_t sunY = SUN_START_Y + (int16_t)(ease * (SUN_END_Y - SUN_START_Y));
+        int16_t sunR = SUN_R_START + (int16_t)(ease * (SUN_R_END - SUN_R_START));
+
+        // --- Light rays / glow (drawn before sun, behind it) ---
+        // Only above sea level
+        if (sunY < SEA_Y + sunR) {
+            for (int ring = 3; ring >= 0; ring--) {
+                int16_t glowR = sunR + 8 + ring * 6;
+                // Fade out with distance
+                uint8_t alpha = (3 - ring) * 2 + 1;  // 7,5,3,1
+                uint16_t glowCol = ((alpha) << 11) | ((alpha * 3) << 5) | 0;
+                // Only draw the part above sea
+                for (int16_t dy = -glowR; dy <= 0; dy++) {
+                    int16_t py = sunY + dy;
+                    if (py < 0 || py >= SEA_Y) continue;
+                    int16_t halfW = (int16_t)sqrtf((float)(glowR * glowR - dy * dy));
+                    int16_t x1 = CX - halfW; if (x1 < 0) x1 = 0;
+                    int16_t x2 = CX + halfW; if (x2 >= W) x2 = W - 1;
+                    canvas.drawFastHLine(x1, py, x2 - x1 + 1, glowCol);
+                }
+            }
+        }
+
+        // --- Sun disc (clipped at sea level — only show part above sea) ---
+        // Draw the sun as a filled circle, but only pixels above SEA_Y
+        for (int16_t dy = -sunR; dy <= sunR; dy++) {
+            int16_t py = sunY + dy;
+            if (py < 0 || py >= H) continue;
+            int16_t halfW = (int16_t)sqrtf((float)(sunR * sunR - dy * dy));
+            int16_t x1 = CX - halfW;
+            int16_t x2 = CX + halfW;
+            if (x1 < 0) x1 = 0;
+            if (x2 >= W) x2 = W - 1;
+
+            if (py < SEA_Y) {
+                // Above sea: bright yellow-green sun
+                uint16_t sunCol = 0xCE40;  // brand yellow-green
+                // Lighter near top of disc for highlight
+                if (dy < -sunR / 2) sunCol = 0xDF00;
+                canvas.drawFastHLine(x1, py, x2 - x1 + 1, sunCol);
+            } else {
+                // Below sea: dim reflection (every other pixel)
+                for (int16_t x = x1; x <= x2; x++) {
+                    if ((x + py) % 3 == 0) {
+                        canvas.drawPixel(x, py, 0x4B00);  // dim yellow
+                    }
+                }
+            }
+        }
+
+        // --- Reflection shimmer on sea surface ---
+        if (sunY < SEA_Y + sunR) {
+            int16_t refW = sunR + (int16_t)(t * 10);
+            for (int16_t x = CX - refW; x <= CX + refW; x++) {
+                if (x < 0 || x >= W) continue;
+                if ((x + f) % 3 == 0) {
+                    canvas.drawPixel(x, SEA_Y, 0xCE40);
+                    if (SEA_Y + 1 < H) canvas.drawPixel(x, SEA_Y + 1, 0x4B00);
+                }
+            }
+        }
+
+        // Increase brightness gradually
+        int brightness = 10 + (int)(ease * 70);
+        M5.Display.setBrightness(brightness);
+
+        canvas.pushSprite(0, 0);
+        delay(33);
+    }
+}
+
 void wakeFromSleep() {
     // Small delay to debounce button
     delay(200);
 
-    // Restore display
-    M5.Display.setBrightness(80);
+    // Start display at low brightness for sunrise effect
+    M5.Display.setBrightness(10);
 
-    // Show wake message
-    canvas.fillSprite(TFT_BLACK);
-    canvas.setTextColor(0xCE40);
-    canvas.setTextDatum(MC_DATUM);
-    canvas.setFont(&fonts::FreeSansBold9pt7b);
-    canvas.drawString("WAKING UP", CX, 50);
-    canvas.pushSprite(0, 0);
-
-    // Restart WiFi AP
+    // Play sunrise animation while WiFi restarts in background
+    // Start WiFi first (it takes ~500ms to come up, overlaps with animation)
     WiFi.mode(WIFI_AP);
     WiFi.softAP(AP_SSID, AP_PASS);
 
-    // Restart HTTP server
-    httpServer.begin();
+    // Play the sunrise animation (~1.2s)
+    playSunriseAnimation();
 
-    // WebSocket server needs restart
+    // By now WiFi should be up — start servers
+    httpServer.begin();
     wsServer.begin();
     wsServer.onEvent(onWsEvent);
 
-    // Re-initialize IMU (may need this after light sleep)
+    // Re-initialize IMU
     M5.Imu.init();
 
     // Reset timing to avoid huge dt jump
     lastUs = micros();
     lastWsSendMs = millis();
 
-    // Brief display of wake message
-    delay(500);
+    // Full brightness
+    M5.Display.setBrightness(80);
 
     // Reset client count since all were disconnected
     clientCount = 0;
