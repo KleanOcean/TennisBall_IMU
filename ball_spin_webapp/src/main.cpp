@@ -7,7 +7,7 @@
  * orientation with quaternion integration and streams at 50Hz.
  *
  * Screen:  128x128 GC9107 IPS - shows WiFi info, client count, RPM
- * Button:  BtnA = reset quaternion orientation to identity
+ * Button:  BtnA short press = reset quaternion, long press 3s = Light Sleep
  * WiFi AP: "TennisBall_IMU" / "tennis123"
  * Web UI:  http://192.168.4.1
  * WS:      ws://192.168.4.1:81
@@ -19,6 +19,8 @@
 #include <WebSocketsServer.h>
 #include <math.h>
 #include <string.h>
+#include "esp_sleep.h"
+#include "driver/gpio.h"
 #include "webpage.h"  // contains: const char index_html[] PROGMEM = R"rawliteral(...)rawliteral";
 
 // --- WiFi AP Config ---
@@ -60,6 +62,15 @@ static const uint16_t COL_SEAM_DIM= 0x4208;  // gray back seam
 // --- Filtered sensor values ---
 static float filtGx  = 0, filtGy = 0, filtGz = 0;
 static float filtRPM = 0;
+
+// --- Sleep mode ---
+static bool sleepPending = false;
+static uint32_t btnPressStartMs = 0;
+static bool btnWasDown = false;
+static const uint32_t SLEEP_HOLD_MS = 3000; // 3 seconds to trigger sleep
+
+// --- Gyro bias estimation (auto-calibration when stationary) ---
+static float gyroBiasX = 0, gyroBiasY = 0, gyroBiasZ = 0;
 
 // --- Timing ---
 static uint32_t lastUs       = 0;
@@ -216,6 +227,80 @@ void setup() {
     lastUs = micros();
 }
 
+// ==================== Light Sleep ====================
+
+void enterLightSleep() {
+    // Show "SLEEPING..." on screen
+    canvas.fillSprite(TFT_BLACK);
+    canvas.setTextColor(0xCE40);
+    canvas.setTextDatum(MC_DATUM);
+    canvas.setFont(&fonts::FreeSansBold9pt7b);
+    canvas.drawString("SLEEPING", CX, 50);
+    canvas.setFont(&fonts::Font0);
+    canvas.setTextColor(0x6B4D);
+    canvas.drawString("Press to wake", CX, 80);
+    canvas.pushSprite(0, 0);
+    delay(500);
+
+    // Turn off display backlight
+    M5.Display.setBrightness(0);
+
+    // Stop WiFi (frees ~80mA)
+    wsServer.close();
+    WiFi.softAPdisconnect(true);
+    WiFi.mode(WIFI_OFF);
+
+    // Configure GPIO wakeup on BtnA (GPIO 41 on ATOM S3)
+    // BtnA is active LOW (pressed = LOW)
+    esp_sleep_enable_gpio_wakeup();
+    gpio_wakeup_enable(GPIO_NUM_41, GPIO_INTR_LOW_LEVEL);
+
+    // Enter Light Sleep - CPU halts here, RAM preserved
+    esp_light_sleep_start();
+
+    // === Execution resumes here after wake ===
+}
+
+void wakeFromSleep() {
+    // Small delay to debounce button
+    delay(200);
+
+    // Restore display
+    M5.Display.setBrightness(80);
+
+    // Show wake message
+    canvas.fillSprite(TFT_BLACK);
+    canvas.setTextColor(0xCE40);
+    canvas.setTextDatum(MC_DATUM);
+    canvas.setFont(&fonts::FreeSansBold9pt7b);
+    canvas.drawString("WAKING UP", CX, 50);
+    canvas.pushSprite(0, 0);
+
+    // Restart WiFi AP
+    WiFi.mode(WIFI_AP);
+    WiFi.softAP(AP_SSID, AP_PASS);
+
+    // Restart HTTP server
+    httpServer.begin();
+
+    // WebSocket server needs restart
+    wsServer.begin();
+    wsServer.onEvent(onWsEvent);
+
+    // Re-initialize IMU (may need this after light sleep)
+    M5.Imu.init();
+
+    // Reset timing to avoid huge dt jump
+    lastUs = micros();
+    lastWsSendMs = millis();
+
+    // Brief display of wake message
+    delay(500);
+
+    // Reset client count since all were disconnected
+    clientCount = 0;
+}
+
 // ==================== Main loop ====================
 
 void loop() {
@@ -223,9 +308,49 @@ void loop() {
     httpServer.handleClient();
     wsServer.loop();
 
-    // BtnA: reset quaternion to identity
-    if (M5.BtnA.wasPressed()) {
-        orient = {1, 0, 0, 0};
+    // --- Button handling: short press = reset quaternion, long press 3s = Light Sleep ---
+    {
+        uint32_t btnNowMs = millis();
+        bool btnDown = M5.BtnA.isPressed();
+
+        if (btnDown && !btnWasDown) {
+            // Button just pressed down
+            btnPressStartMs = btnNowMs;
+            btnWasDown = true;
+            sleepPending = false;
+        }
+
+        if (btnDown && btnWasDown) {
+            uint32_t held = btnNowMs - btnPressStartMs;
+
+            // Show sleep progress on screen while holding (after 1 second)
+            if (held >= 1000 && held < SLEEP_HOLD_MS) {
+                sleepPending = true;
+            }
+
+            // Trigger sleep after 3 seconds
+            if (held >= SLEEP_HOLD_MS) {
+                enterLightSleep();
+                // After waking up, execution continues here
+                wakeFromSleep();
+                btnWasDown = false;
+                sleepPending = false;
+                return; // Skip rest of loop() this iteration
+            }
+        }
+
+        if (!btnDown && btnWasDown) {
+            // Button released
+            uint32_t held = btnNowMs - btnPressStartMs;
+            btnWasDown = false;
+            sleepPending = false;
+
+            if (held < 1000) {
+                // Short press: reset quaternion (existing behavior)
+                orient = {1, 0, 0, 0};
+            }
+            // If held 1-3s, just cancel - do nothing
+        }
     }
 
     // Read IMU data
@@ -241,9 +366,24 @@ void loop() {
     lastUs = nowUs;
 
     // Gyro in rad/s for quaternion integration
-    float gx = d.gyro.x * (M_PI / 180.0f);
-    float gy = d.gyro.y * (M_PI / 180.0f);
-    float gz = d.gyro.z * (M_PI / 180.0f);
+    float gxRaw = d.gyro.x * (M_PI / 180.0f);
+    float gyRaw = d.gyro.y * (M_PI / 180.0f);
+    float gzRaw = d.gyro.z * (M_PI / 180.0f);
+
+    // Adaptive gyro bias estimation: when angular velocity is low
+    // (ball likely stationary), slowly learn the zero-rate offset.
+    float rawMag = sqrtf(gxRaw * gxRaw + gyRaw * gyRaw + gzRaw * gzRaw);
+    if (rawMag < 0.15f) {  // < ~8.6 deg/s → likely stationary
+        const float biasAlpha = 0.002f;  // very slow adaptation
+        gyroBiasX += biasAlpha * (gxRaw - gyroBiasX);
+        gyroBiasY += biasAlpha * (gyRaw - gyroBiasY);
+        gyroBiasZ += biasAlpha * (gzRaw - gyroBiasZ);
+    }
+
+    // Subtract estimated bias
+    float gx = gxRaw - gyroBiasX;
+    float gy = gyRaw - gyroBiasY;
+    float gz = gzRaw - gyroBiasZ;
 
     // Filtered gyro (deg/s) for display and streaming
     filtGx += 0.15f * (d.gyro.x - filtGx);
@@ -304,9 +444,9 @@ void loop() {
     }
 
     // Integrate quaternion from angular velocity
-    // Dead zone 0.05 rad/s (~3 deg/s) to reject MPU6886 gyro drift
+    // Dead zone 0.1 rad/s (~5.7 deg/s) to reject residual gyro drift after bias removal
     float wmag = sqrtf(gx * gx + gy * gy + gz * gz);
-    if (wmag > 0.05f) {
+    if (wmag > 0.10f) {
         float angle = wmag * dt;
         float ha    = angle * 0.5f;
         float sha   = sinf(ha);
@@ -413,6 +553,57 @@ void loop() {
         canvas.drawString(buf, 4, 110);
         canvas.setTextColor(TFT_CYAN);
         canvas.drawString(WiFi.softAPIP().toString().c_str(), 4, 120);
+
+        // Sea-level rise sleep countdown overlay
+        if (sleepPending && btnWasDown) {
+            uint32_t held = nowMs - btnPressStartMs;
+
+            // Progress: 0.0 at 1s held → 1.0 at 3s held
+            float progress = (float)(held - 1000) / (float)(SLEEP_HOLD_MS - 1000);
+            if (progress < 0.0f) progress = 0.0f;
+            if (progress > 1.0f) progress = 1.0f;
+
+            // Sea level rises from bottom (y=127) to top (y=0)
+            int16_t seaTop = H - 1 - (int16_t)(progress * (H - 1));
+
+            // Semi-transparent sea fill: dark teal overlay
+            // Draw horizontal lines with alternating shading for wave texture
+            for (int16_t y = seaTop; y < H; y++) {
+                // Deeper = more opaque teal; near surface = brighter
+                int depth = y - seaTop;
+                uint16_t col;
+                if (depth < 3) {
+                    col = 0x07FF;  // bright cyan — wave crest
+                } else if (depth < 8) {
+                    col = 0x0597;  // medium teal
+                } else {
+                    col = 0x0293;  // deep dark teal
+                }
+                // Blend: draw every other pixel for semi-transparency
+                for (int16_t x = 0; x < W; x++) {
+                    if ((x + y) % 2 == 0) {
+                        canvas.drawPixel(x, y, col);
+                    }
+                }
+            }
+
+            // Wave crest highlight: thin bright line at the surface
+            if (seaTop >= 0 && seaTop < H) {
+                canvas.drawFastHLine(0, seaTop, W, 0x07FF);  // cyan line
+            }
+
+            // Countdown text floating above the sea level
+            int remaining = 3 - (int)(held / 1000);
+            if (remaining < 1) remaining = 1;
+            int16_t textY = seaTop - 14;
+            if (textY < 2) textY = 2;
+            char sleepBuf[8];
+            snprintf(sleepBuf, sizeof(sleepBuf), "%d", remaining);
+            canvas.setFont(&fonts::FreeSansBold9pt7b);
+            canvas.setTextDatum(MC_DATUM);
+            canvas.setTextColor(0x07FF);  // cyan
+            canvas.drawString(sleepBuf, CX, textY);
+        }
 
         canvas.pushSprite(0, 0);
     }
