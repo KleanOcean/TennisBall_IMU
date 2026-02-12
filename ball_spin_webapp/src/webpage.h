@@ -99,6 +99,16 @@ body{background:#0a0e27;color:#fff;font-family:system-ui,-apple-system,sans-seri
 .mrpm-unit{font-size:1.8rem;font-weight:700;color:#C8D820;letter-spacing:3px;display:inline}
 .mrpm-spin{font-size:1.1rem;font-weight:600;color:#99aa88;margin-top:8px;letter-spacing:2px;text-transform:uppercase}
 @media(max-width:768px){.mobile-rpm{display:block}}
+.raw-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:12px}
+@media(max-width:768px){.raw-grid{grid-template-columns:1fr}}
+.raw-card{background:#0a0e27;border:1px solid #1a2040;border-radius:10px;padding:12px;text-align:center}
+.raw-label{font-size:0.72rem;color:#667788;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px;font-weight:600}
+.raw-legend{font-size:0.7rem;margin-top:6px;display:flex;gap:12px;justify-content:center}
+.raw-peak{font-size:0.8rem;color:#C8D820;margin-top:6px;font-family:'Courier New',monospace}
+.euler-vals{font-family:'Courier New',monospace;font-size:0.85rem;color:#C8D820;text-align:left;display:inline-block;line-height:1.8}
+.euler-vals span{color:#fff;font-weight:700}
+#accelChart,#gyroChart{width:100%;height:120px;border-radius:6px}
+#levelCanvas{margin-top:8px}
 </style>
 </head>
 <body>
@@ -149,6 +159,39 @@ body{background:#0a0e27;color:#fff;font-family:system-ui,-apple-system,sans-seri
 <div class="card">
 <div class="card-title">Shot Timeline</div>
 <div class="tl-row" id="tlRow"></div>
+</div>
+</div>
+</div>
+<div class="card" style="margin-top:18px;grid-column:1/-1">
+<div class="card-title" style="cursor:pointer;display:flex;align-items:center;gap:8px" onclick="toggleRaw()">
+<span id="rawArrow">&#9654;</span> RAW DATA
+</div>
+<div id="rawPanel" style="display:none">
+<div class="raw-grid">
+<div class="raw-card">
+<div class="raw-label">ACCELEROMETER (g)</div>
+<canvas id="accelChart"></canvas>
+<div class="raw-legend"><span style="color:#FF6B6B">&#9679; ax</span> <span style="color:#4ECDC4">&#9679; ay</span> <span style="color:#6B9FFF">&#9679; az</span></div>
+</div>
+<div class="raw-card">
+<div class="raw-label">GYROSCOPE (&deg;/s)</div>
+<canvas id="gyroChart"></canvas>
+<div class="raw-legend"><span style="color:#FF6B6B">&#9679; gx</span> <span style="color:#4ECDC4">&#9679; gy</span> <span style="color:#6B9FFF">&#9679; gz</span></div>
+</div>
+<div class="raw-card">
+<div class="raw-label">G-FORCE</div>
+<canvas id="gforceGauge" width="200" height="160"></canvas>
+<div id="gforcePeak" class="raw-peak">Peak: --</div>
+</div>
+<div class="raw-card">
+<div class="raw-label">ORIENTATION</div>
+<div id="eulerVals" class="euler-vals">
+<div>Pitch: <span id="valPitch">0.0&deg;</span></div>
+<div>Roll: <span id="valRoll">0.0&deg;</span></div>
+<div>Yaw: <span id="valYaw">0.0&deg;</span></div>
+</div>
+<canvas id="levelCanvas" width="120" height="120"></canvas>
+</div>
 </div>
 </div>
 </div>
@@ -231,6 +274,13 @@ let rpmHist=[];
 let recording=false,recData=[];
 let shots=[],firstShotTime=0;
 let ballMode=localStorage.getItem('ballMode')||'wire';
+const RAW_N=200;
+let rawOpen=false;
+const abuf={ax:new Float32Array(RAW_N),ay:new Float32Array(RAW_N),az:new Float32Array(RAW_N),i:0,n:0};
+const gbuf={gx:new Float32Array(RAW_N),gy:new Float32Array(RAW_N),gz:new Float32Array(RAW_N),i:0,n:0};
+let curG=1.0,peakG=0,lastPeakG=0;
+let eulerP=0,eulerR=0,eulerY=0;
+let rawDrawT=0;
 const impactFlash=document.getElementById('impactFlash');
 const sDot=document.getElementById('sDot'),sTxt=document.getElementById('sTxt');
 const spinType=document.getElementById('spinType');
@@ -289,6 +339,21 @@ quat={w:d.qw||1,x:d.qx||0,y:d.qy||0,z:d.qz||0};
 rpm=d.rpm||0;
 rpmHist.push(rpm);if(rpmHist.length>HIST_LEN)rpmHist.shift();
 if(recording){recData.push({t:d.t||0,ax,ay,az,gx,gy,gz,qw:quat.w,qx:quat.x,qy:quat.y,qz:quat.z,rpm});recCnt.textContent=recData.length;}
+abuf.ax[abuf.i]=ax;abuf.ay[abuf.i]=ay;abuf.az[abuf.i]=az;
+abuf.i=(abuf.i+1)%RAW_N;if(abuf.n<RAW_N)abuf.n++;
+gbuf.gx[gbuf.i]=gx;gbuf.gy[gbuf.i]=gy;gbuf.gz[gbuf.i]=gz;
+gbuf.i=(gbuf.i+1)%RAW_N;if(gbuf.n<RAW_N)gbuf.n++;
+curG=Math.sqrt(ax*ax+ay*ay+az*az);
+if(curG>peakG)peakG=curG;
+if(d.imp===1){lastPeakG=peakG;peakG=0;}
+if(d.qw!=null){
+const sinp=2*(d.qw*d.qy-d.qz*d.qx);
+eulerP=Math.abs(sinp)>=1?Math.sign(sinp)*90:Math.asin(sinp)*180/Math.PI;
+const siny=2*(d.qw*d.qz+d.qx*d.qy),cosy=1-2*(d.qy*d.qy+d.qz*d.qz);
+eulerY=Math.atan2(siny,cosy)*180/Math.PI;
+const sinr=2*(d.qw*d.qx+d.qy*d.qz),cosr=1-2*(d.qx*d.qx+d.qy*d.qy);
+eulerR=Math.atan2(sinr,cosr)*180/Math.PI;
+}
 if(d.imp===1){impactFlash.classList.add('active');setTimeout(()=>impactFlash.classList.remove('active'),150);}
 if(d.spin){spinType.textContent=d.spin;spinType.className='spin-label spin-'+d.spin;}
 if(d.event==='shot'){shots.push(d);if(shots.length===1)firstShotTime=d.t;updateTimeline();updateTlDots();}
@@ -626,6 +691,113 @@ document.getElementById('shotDetail').classList.remove('show');
 if(ws&&ws.readyState===1)ws.send('clear_shots');
 }
 
+/* Raw data toggle & drawing */
+function toggleRaw(){
+rawOpen=!rawOpen;
+document.getElementById('rawPanel').style.display=rawOpen?'block':'none';
+document.getElementById('rawArrow').innerHTML=rawOpen?'&#9660;':'&#9654;';
+if(rawOpen)initRawCv();
+}
+function initRawCv(){
+['accelChart','gyroChart'].forEach(id=>{
+const c=document.getElementById(id);if(!c)return;
+const r=c.getBoundingClientRect();
+c.width=r.width*(window.devicePixelRatio||1);
+c.height=120*(window.devicePixelRatio||1);
+});
+}
+window.addEventListener('resize',()=>{if(rawOpen)initRawCv();});
+function drawRawData(){
+if(!rawOpen)return;
+const now=performance.now();
+if(now-rawDrawT<100)return;
+rawDrawT=now;
+drawAxisChart('accelChart',abuf,['ax','ay','az'],'g');
+drawAxisChart('gyroChart',gbuf,['gx','gy','gz'],'d/s');
+drawGForceGauge();
+drawLevel();
+const vp=document.getElementById('valPitch'),vr=document.getElementById('valRoll'),vy=document.getElementById('valYaw');
+if(vp)vp.textContent=eulerP.toFixed(1)+'\u00B0';
+if(vr)vr.textContent=eulerR.toFixed(1)+'\u00B0';
+if(vy)vy.textContent=eulerY.toFixed(1)+'\u00B0';
+}
+function drawAxisChart(cid,buf,keys,unit){
+const c=document.getElementById(cid);if(!c||!c.getContext)return;
+const ctx=c.getContext('2d'),dpr=window.devicePixelRatio||1;
+const w=c.width,h=c.height;
+ctx.clearRect(0,0,w,h);ctx.fillStyle='#0a0e27';ctx.fillRect(0,0,w,h);
+if(buf.n===0)return;
+const vals={};keys.forEach(k=>{vals[k]=[];});
+const st=buf.n<RAW_N?0:buf.i;
+for(let i=0;i<buf.n;i++){const idx=(st+i)%RAW_N;keys.forEach(k=>{vals[k].push(buf[k][idx]);});}
+let mn=Infinity,mx=-Infinity;
+keys.forEach(k=>{vals[k].forEach(v=>{if(v<mn)mn=v;if(v>mx)mx=v;});});
+if(mx===mn){mx=mn+1;mn=mn-1;}
+const pd=Math.max((mx-mn)*0.15,0.5);mn-=pd;mx+=pd;
+const rng=mx-mn,pL=40*dpr,pR=8*dpr,pT=8*dpr,pB=14*dpr,pW=w-pL-pR,pH=h-pT-pB;
+ctx.strokeStyle='#1a2040';ctx.lineWidth=1;
+ctx.fillStyle='#667788';ctx.font=(9*dpr)+'px "Courier New",monospace';
+ctx.textAlign='right';ctx.textBaseline='middle';
+for(let i=0;i<=4;i++){
+const y=pT+(i/4)*pH;
+ctx.beginPath();ctx.moveTo(pL,y);ctx.lineTo(w-pR,y);ctx.stroke();
+ctx.fillText((mx-(i/4)*rng).toFixed(1),pL-4*dpr,y);
+}
+if(mn<0&&mx>0){
+const zy=pT+(1-((0-mn)/rng))*pH;
+ctx.strokeStyle='#334455';ctx.setLineDash([4,4]);
+ctx.beginPath();ctx.moveTo(pL,zy);ctx.lineTo(w-pR,zy);ctx.stroke();
+ctx.setLineDash([]);
+}
+const cols=['#FF6B6B','#4ECDC4','#6B9FFF'],oX=RAW_N-buf.n;
+keys.forEach((k,ki)=>{
+ctx.beginPath();ctx.strokeStyle=cols[ki];ctx.lineWidth=1.5*dpr;ctx.lineJoin='round';
+for(let i=0;i<vals[k].length;i++){
+const x=pL+((oX+i)/(RAW_N-1))*pW;
+const y=pT+(1-((vals[k][i]-mn)/rng))*pH;
+if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+}ctx.stroke();
+});
+}
+function drawGForceGauge(){
+const c=document.getElementById('gforceGauge');if(!c)return;
+const ctx=c.getContext('2d'),w=c.width,h=c.height;
+ctx.clearRect(0,0,w,h);
+const cx=w/2,cy=h*0.7,r=Math.min(w,h)*0.38;
+const sa=0.75*Math.PI,ea=2.25*Math.PI,sw=ea-sa,gM=10;
+ctx.beginPath();ctx.arc(cx,cy,r,sa,ea);
+ctx.strokeStyle='#222244';ctx.lineWidth=10;ctx.lineCap='round';ctx.stroke();
+const ratio=Math.min(curG/gM,1);
+if(ratio>0){
+ctx.beginPath();ctx.arc(cx,cy,r,sa,sa+sw*ratio);
+let col='#C8D820';if(curG>4)col='#FF6B6B';else if(curG>2)col='#FFE66D';
+ctx.strokeStyle=col;ctx.lineWidth=10;ctx.lineCap='round';ctx.stroke();
+}
+ctx.fillStyle='#C8D820';ctx.font='bold '+Math.round(r*0.6)+'px "Courier New",monospace';
+ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(curG.toFixed(1),cx,cy-4);
+ctx.fillStyle='#667788';ctx.font=Math.round(r*0.22)+'px system-ui,sans-serif';
+ctx.fillText('g',cx,cy+r*0.3);
+const pe=document.getElementById('gforcePeak');
+if(pe)pe.textContent='Peak: '+(lastPeakG>0?lastPeakG.toFixed(1)+'g':'--');
+}
+function drawLevel(){
+const c=document.getElementById('levelCanvas');if(!c)return;
+const ctx=c.getContext('2d'),w=c.width,h=c.height;
+ctx.clearRect(0,0,w,h);
+const cx=w/2,cy=h/2,R=Math.min(w,h)/2-4;
+ctx.beginPath();ctx.arc(cx,cy,R,0,Math.PI*2);ctx.strokeStyle='#222244';ctx.lineWidth=2;ctx.stroke();
+ctx.strokeStyle='#1a2040';ctx.lineWidth=1;
+ctx.beginPath();ctx.moveTo(cx-R,cy);ctx.lineTo(cx+R,cy);ctx.stroke();
+ctx.beginPath();ctx.moveTo(cx,cy-R);ctx.lineTo(cx,cy+R);ctx.stroke();
+const mA=45,bx=cx+(eulerR/mA)*R*0.85,by=cy-(eulerP/mA)*R*0.85;
+const dx=bx-cx,dy=by-cy,dist=Math.sqrt(dx*dx+dy*dy);
+let fx=bx,fy=by;
+if(dist>R-6){fx=cx+dx/dist*(R-6);fy=cy+dy/dist*(R-6);}
+ctx.beginPath();ctx.arc(fx,fy,6,0,Math.PI*2);ctx.fillStyle='#C8D820';ctx.fill();
+ctx.strokeStyle='rgba(200,216,32,0.4)';ctx.lineWidth=2;ctx.stroke();
+ctx.beginPath();ctx.arc(cx,cy,2,0,Math.PI*2);ctx.fillStyle='#667788';ctx.fill();
+}
+
 /* Main render loop */
 let lastFrame=0;
 function loop(ts){
@@ -635,6 +807,7 @@ lastFrame=ts;
 drawBall();
 drawGauge();
 drawRpmChart();
+drawRawData();
 if(!connected)spinType.textContent=classifySpin(gx,gy,gz);
 const me=document.getElementById('mRpmVal');
 if(me)me.textContent=Math.round(rpm);
