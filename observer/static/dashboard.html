@@ -146,6 +146,17 @@ body{background:var(--bg);color:var(--text-primary);font-family:system-ui,-apple
 /* ====== No data ====== */
 .no-data{text-align:center;color:var(--text-secondary);padding:40px 0;font-size:0.85rem}
 
+/* ====== Real-Time Chart ====== */
+.rt-chart-card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px;margin-bottom:18px}
+.rt-chart-card .card-title{font-size:0.8rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:10px;font-weight:600;display:flex;align-items:center;gap:8px}
+.rt-chart-card .card-title .live-badge{font-size:0.65rem;background:rgba(200,216,32,0.15);color:var(--accent);padding:2px 8px;border-radius:10px;font-weight:700;letter-spacing:0.5px}
+#rpmChartCanvas{width:100%;height:160px;border-radius:8px;display:block}
+
+/* ====== Connection Status ====== */
+.ws-status{display:inline-flex;align-items:center;gap:5px;font-size:0.72rem;margin-left:6px}
+.ws-status .ws-label{color:var(--accent);font-weight:700;letter-spacing:1px}
+.ws-status.offline .ws-label{color:var(--text-secondary);font-weight:400}
+
 /* ====== Responsive ====== */
 @media(max-width:768px){
   .header{padding:10px 14px;gap:12px;flex-wrap:wrap}
@@ -208,8 +219,12 @@ body{background:var(--bg);color:var(--text-primary);font-family:system-ui,-apple
             </div>
         </div>
 
-        <!-- RIGHT: Polar Plot + Distribution -->
+        <!-- RIGHT: Real-Time Chart + Polar Plot + Distribution -->
         <div class="col-right">
+            <div class="rt-chart-card">
+                <div class="card-title">Real Time Chart <span class="live-badge" id="chartLiveBadge">LIVE</span></div>
+                <canvas id="rpmChartCanvas"></canvas>
+            </div>
             <div class="card">
                 <div class="card-title">Spin Axis Plot</div>
                 <div class="polar-container">
@@ -1323,16 +1338,28 @@ function updateSessionHeader() {
     const txt = document.getElementById('sessionText');
 
     if (!currentSession) {
-        dot.className = 'status-dot ended';
-        txt.textContent = 'Select Session';
+        // No session – show WS status only
+        if (wsConnected) {
+            dot.className = 'status-dot active';
+            txt.innerHTML = 'No Session <span class="ws-status"><span class="ws-label">LIVE</span></span>';
+        } else {
+            dot.className = 'status-dot ended';
+            txt.innerHTML = 'Select Session <span class="ws-status offline"><span class="ws-label">Connecting\u2026</span></span>';
+        }
         return;
     }
 
     const isRecording = !currentSession.end_time;
-    dot.className = 'status-dot ' + (isRecording ? 'active' : 'ended');
-
     const samples = currentSession.total_samples || 0;
-    txt.textContent = 'Session #' + currentSession.id + (isRecording ? ' Recording' : ' Ended') + ' \u00B7 ' + samples + ' samples';
+    const base = 'Session #' + currentSession.id + (isRecording ? ' Recording' : ' Ended') + ' \u00B7 ' + samples + ' samples';
+
+    if (wsConnected) {
+        dot.className = 'status-dot active';
+        txt.innerHTML = base + ' <span class="ws-status"><span class="ws-label">LIVE</span></span>';
+    } else {
+        dot.className = 'status-dot ' + (isRecording ? 'active' : 'ended');
+        txt.innerHTML = base + ' <span class="ws-status offline"><span class="ws-label">Connecting\u2026</span></span>';
+    }
 }
 
 async function deleteSession(sid) {
@@ -1389,6 +1416,385 @@ function exportJSON() {
 }
 
 // ============================================================
+// WebSocket Client – Real-Time IMU Data
+// ============================================================
+
+let ws = null;
+let wsConnected = false;
+let wsReconnectTimer = null;
+
+// Live RPM value driven by WS frames
+let liveRPM = 0;
+
+// Throttle timestamps (ms)
+let lastGaugeDraw = 0;
+let lastChartDraw = 0;
+
+// RPM chart ring buffer (last 250 data points)
+const RPM_BUF_SIZE = 250;
+const rpmBuffer = new Float32Array(RPM_BUF_SIZE);
+let rpmBufIdx = 0;     // next write position
+let rpmBufCount = 0;   // how many values stored so far
+
+function getWsUrl() {
+    // Allow override via ?ws=<url> query parameter
+    const params = new URLSearchParams(window.location.search);
+    const override = params.get('ws');
+    if (override) return override;
+    return 'ws://192.168.4.1:81';
+}
+
+function connectWebSocket() {
+    if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return;
+
+    const url = getWsUrl();
+    try {
+        ws = new WebSocket(url);
+    } catch (e) {
+        console.error('WS creation failed:', e);
+        scheduleReconnect();
+        return;
+    }
+
+    ws.onopen = function() {
+        wsConnected = true;
+        if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
+        updateWsStatus();
+        console.log('WS connected to', url);
+    };
+
+    ws.onclose = function() {
+        wsConnected = false;
+        updateWsStatus();
+        scheduleReconnect();
+    };
+
+    ws.onerror = function(e) {
+        console.error('WS error:', e);
+        wsConnected = false;
+        updateWsStatus();
+        try { ws.close(); } catch(_) {}
+    };
+
+    ws.onmessage = function(evt) {
+        try {
+            const data = JSON.parse(evt.data);
+            handleWsMessage(data);
+        } catch (e) {
+            // ignore non-JSON frames
+        }
+    };
+}
+
+function scheduleReconnect() {
+    if (wsReconnectTimer) return;
+    wsReconnectTimer = setTimeout(function() {
+        wsReconnectTimer = null;
+        connectWebSocket();
+    }, 2000);
+}
+
+function updateWsStatus() {
+    const dot = document.getElementById('sessionDot');
+    const txt = document.getElementById('sessionText');
+
+    if (wsConnected) {
+        dot.className = 'status-dot active';
+        // Preserve existing session text but append LIVE
+        const base = currentSession
+            ? 'Session #' + currentSession.id + (!currentSession.end_time ? ' Recording' : ' Ended')
+            : 'Select Session';
+        txt.innerHTML = base + ' <span class="ws-status"><span class="ws-label">LIVE</span></span>';
+    } else {
+        // If we have an active session keep its dot state, otherwise grey
+        if (currentSession && !currentSession.end_time) {
+            dot.className = 'status-dot active';
+        } else {
+            dot.className = 'status-dot ended';
+        }
+        const base = currentSession
+            ? 'Session #' + currentSession.id + (!currentSession.end_time ? ' Recording' : ' Ended')
+            : 'Select Session';
+        txt.innerHTML = base + ' <span class="ws-status offline"><span class="ws-label">Connecting\u2026</span></span>';
+    }
+}
+
+function handleWsMessage(data) {
+    // ---- Shot event ----
+    if (data.event === 'shot') {
+        handleWsShotEvent(data);
+        return;
+    }
+
+    // ---- Regular IMU frame ----
+    // Update ball rotation from quaternion
+    if (data.qw != null && data.qx != null && data.qy != null && data.qz != null) {
+        const qw = data.qw, qx = data.qx, qy = data.qy, qz = data.qz;
+        const sinp = 2 * (qw * qy - qz * qx);
+        const pitch = Math.abs(sinp) >= 1 ? Math.sign(sinp) * Math.PI / 2 : Math.asin(sinp);
+        const siny = 2 * (qw * qz + qx * qy);
+        const cosy = 1 - 2 * (qy * qy + qz * qz);
+        const yaw = Math.atan2(siny, cosy);
+        ballRotX = pitch;
+        ballRotY = yaw;
+    }
+
+    // Update live RPM
+    if (data.rpm != null) {
+        liveRPM = data.rpm;
+
+        // Push into ring buffer
+        rpmBuffer[rpmBufIdx] = liveRPM;
+        rpmBufIdx = (rpmBufIdx + 1) % RPM_BUF_SIZE;
+        if (rpmBufCount < RPM_BUF_SIZE) rpmBufCount++;
+    }
+
+    // Throttled gauge redraw (~10fps)
+    const now = performance.now();
+    if (now - lastGaugeDraw > 100) {
+        lastGaugeDraw = now;
+        drawGaugeLive(liveRPM);
+    }
+
+    // Throttled chart redraw (~15fps)
+    if (now - lastChartDraw > 66) {
+        lastChartDraw = now;
+        drawRpmChart();
+    }
+}
+
+// Draw gauge with a single live RPM value (not session average)
+function drawGaugeLive(rpm) {
+    const canvas = document.getElementById('gaugeCanvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    const cx = w / 2;
+    const cy = h * 0.78;
+    const radius = Math.min(w, h) * 0.42;
+    const startAngle = 0.75 * Math.PI;
+    const endAngle = 2.25 * Math.PI;
+    const totalSweep = endAngle - startAngle;
+
+    // Track arc
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, startAngle, endAngle, false);
+    ctx.strokeStyle = '#222244';
+    ctx.lineWidth = 14;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+
+    // Determine gauge max dynamically
+    const stats = computeStats();
+    const gaugeMax = Math.max(stats.maxRPM, 200, rpm * 1.3);
+    const fillRatio = Math.min(rpm / gaugeMax, 1);
+
+    if (fillRatio > 0) {
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, startAngle, startAngle + totalSweep * fillRatio, false);
+        ctx.strokeStyle = '#C8D820';
+        ctx.lineWidth = 14;
+        ctx.lineCap = 'round';
+        ctx.stroke();
+
+        ctx.shadowColor = 'rgba(200,216,32,0.5)';
+        ctx.shadowBlur = 15;
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, startAngle, startAngle + totalSweep * fillRatio, false);
+        ctx.strokeStyle = 'rgba(200,216,32,0.3)';
+        ctx.lineWidth = 14;
+        ctx.lineCap = 'round';
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        ctx.shadowColor = 'transparent';
+    }
+
+    // Center RPM text
+    ctx.fillStyle = '#C8D820';
+    ctx.font = 'bold ' + Math.round(radius * 0.65) + 'px "Courier New", monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(Math.round(rpm), cx, cy - 10);
+
+    ctx.fillStyle = '#667788';
+    ctx.font = '600 ' + Math.round(radius * 0.2) + 'px system-ui, sans-serif';
+    ctx.fillText('RPM', cx, cy + radius * 0.3);
+    ctx.font = Math.round(radius * 0.16) + 'px system-ui, sans-serif';
+    ctx.fillText('LIVE', cx, cy + radius * 0.5);
+}
+
+// ============================================================
+// Real-Time Rolling RPM Chart (Canvas)
+// ============================================================
+
+function initRpmChart() {
+    const canvas = document.getElementById('rpmChartCanvas');
+    if (!canvas) return;
+    // Set canvas resolution to match CSS size
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width * (window.devicePixelRatio || 1);
+    canvas.height = 160 * (window.devicePixelRatio || 1);
+    drawRpmChart();
+}
+
+function drawRpmChart() {
+    const canvas = document.getElementById('rpmChartCanvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    // Background
+    ctx.fillStyle = '#0a0e27';
+    ctx.fillRect(0, 0, w, h);
+
+    if (rpmBufCount === 0) {
+        // No data yet – draw placeholder text
+        ctx.fillStyle = '#667788';
+        ctx.font = (12 * dpr) + 'px system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('Waiting for data\u2026', w / 2, h / 2);
+        return;
+    }
+
+    // Read values from ring buffer in order (oldest to newest)
+    const values = [];
+    const startIdx = rpmBufCount < RPM_BUF_SIZE ? 0 : rpmBufIdx;
+    for (let i = 0; i < rpmBufCount; i++) {
+        values.push(rpmBuffer[(startIdx + i) % RPM_BUF_SIZE]);
+    }
+
+    // Compute Y-axis range
+    let minV = Infinity, maxV = -Infinity;
+    for (let i = 0; i < values.length; i++) {
+        if (values[i] < minV) minV = values[i];
+        if (values[i] > maxV) maxV = values[i];
+    }
+    // Add some padding
+    if (maxV === minV) { maxV = minV + 50; minV = Math.max(0, minV - 10); }
+    const rangeV = maxV - minV;
+    minV = Math.max(0, minV - rangeV * 0.1);
+    maxV = maxV + rangeV * 0.1;
+    const range = maxV - minV;
+
+    const padL = 50 * dpr;
+    const padR = 10 * dpr;
+    const padT = 10 * dpr;
+    const padB = 20 * dpr;
+    const plotW = w - padL - padR;
+    const plotH = h - padT - padB;
+
+    // Grid lines (horizontal)
+    const gridSteps = 4;
+    ctx.strokeStyle = '#1a2040';
+    ctx.lineWidth = 1;
+    ctx.fillStyle = '#667788';
+    ctx.font = (10 * dpr) + 'px "Courier New", monospace';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    for (let i = 0; i <= gridSteps; i++) {
+        const y = padT + (i / gridSteps) * plotH;
+        const val = maxV - (i / gridSteps) * range;
+        ctx.beginPath();
+        ctx.moveTo(padL, y);
+        ctx.lineTo(w - padR, y);
+        ctx.stroke();
+        ctx.fillText(Math.round(val), padL - 6 * dpr, y);
+    }
+
+    // Map values to pixel coordinates
+    function xPos(i) { return padL + (i / (RPM_BUF_SIZE - 1)) * plotW; }
+    function yPos(v) { return padT + (1 - (v - minV) / range) * plotH; }
+
+    // Gradient fill under line
+    const grad = ctx.createLinearGradient(0, padT, 0, h - padB);
+    grad.addColorStop(0, 'rgba(200,216,32,0.35)');
+    grad.addColorStop(1, 'rgba(200,216,32,0)');
+
+    // Build path
+    ctx.beginPath();
+    const offsetX = RPM_BUF_SIZE - values.length;
+    ctx.moveTo(xPos(offsetX), yPos(values[0]));
+    for (let i = 1; i < values.length; i++) {
+        ctx.lineTo(xPos(offsetX + i), yPos(values[i]));
+    }
+
+    // Stroke the line
+    ctx.strokeStyle = '#C8D820';
+    ctx.lineWidth = 2 * dpr;
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+
+    // Fill area
+    ctx.lineTo(xPos(offsetX + values.length - 1), h - padB);
+    ctx.lineTo(xPos(offsetX), h - padB);
+    ctx.closePath();
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // RPM label on Y-axis
+    ctx.save();
+    ctx.fillStyle = '#667788';
+    ctx.font = (10 * dpr) + 'px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.translate(12 * dpr, h / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText('RPM', 0, 0);
+    ctx.restore();
+}
+
+// ============================================================
+// WebSocket Shot Event Handler
+// ============================================================
+
+function handleWsShotEvent(data) {
+    // Map WS shot event fields to the format used by currentShots
+    const shot = {
+        id: data.id,
+        rpm: data.rpm || 0,
+        spin_type: data.type || 'MIXED',
+        peak_g: data.peakG || 0,
+        device_ts: data.t || 0,
+        local_ts: new Date().toLocaleTimeString(),
+        // Compute spin axis from gyro if available
+        spin_axis_phi: null,
+        spin_axis_theta: null,
+        gx: data.gx, gy: data.gy, gz: data.gz
+    };
+
+    // Compute spin axis phi from gyro components
+    if (data.gx != null && data.gy != null && data.gz != null) {
+        const gx = data.gx, gy = data.gy, gz = data.gz;
+        shot.spin_axis_phi = Math.atan2(gy, gx) * 180 / Math.PI;
+        shot.spin_axis_theta = Math.atan2(gz, Math.sqrt(gx * gx + gy * gy)) * 180 / Math.PI;
+    }
+
+    // Add to shots
+    currentShots.push(shot);
+
+    // Re-render
+    renderPolarShots();
+    updateStats();
+    updateDistribution();
+    renderTimeline();
+    renderShotDetail();
+
+    // Flash timeline to indicate new shot
+    const timelineSection = document.querySelector('.timeline-section');
+    if (timelineSection) {
+        timelineSection.style.boxShadow = '0 0 15px rgba(200,216,32,0.4)';
+        setTimeout(function() {
+            timelineSection.style.boxShadow = 'none';
+        }, 600);
+    }
+}
+
+// ============================================================
 // Initialization
 // ============================================================
 
@@ -1407,6 +1813,12 @@ async function init() {
     // Initial gauge draw (empty)
     drawGauge(0, 200);
 
+    // Initialize the RPM chart canvas
+    initRpmChart();
+
+    // Start WebSocket connection
+    connectWebSocket();
+
     await fetchSessions();
     renderSessionTable();
 
@@ -1422,6 +1834,11 @@ async function init() {
     // Update settings on load
     updateSettings();
 }
+
+// Resize RPM chart canvas on window resize
+window.addEventListener('resize', function() {
+    initRpmChart();
+});
 
 init();
 </script>
