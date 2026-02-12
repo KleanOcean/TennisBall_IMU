@@ -477,10 +477,10 @@ void loop() {
     float gzRaw = d.gyro.z * (M_PI / 180.0f);
 
     // Adaptive gyro bias estimation: when angular velocity is low
-    // (ball likely stationary), slowly learn the zero-rate offset.
+    // (ball likely stationary), learn the zero-rate offset.
     float rawMag = sqrtf(gxRaw * gxRaw + gyRaw * gyRaw + gzRaw * gzRaw);
-    if (rawMag < 0.15f) {  // < ~8.6 deg/s → likely stationary
-        const float biasAlpha = 0.002f;  // very slow adaptation
+    if (rawMag < 0.2f) {  // < ~11.5 deg/s → likely stationary
+        const float biasAlpha = 0.01f;  // faster adaptation to track temp drift
         gyroBiasX += biasAlpha * (gxRaw - gyroBiasX);
         gyroBiasY += biasAlpha * (gyRaw - gyroBiasY);
         gyroBiasZ += biasAlpha * (gzRaw - gyroBiasZ);
@@ -564,6 +564,16 @@ void loop() {
             gz * invW * sha
         };
         orient = qmul(orient, dq);
+        qnorm(orient);
+    } else {
+        // Below dead zone (ball is static): slowly decay quaternion toward
+        // identity to auto-correct any accumulated drift over time.
+        // Slerp toward {1,0,0,0} with a small factor each frame.
+        const float decay = 0.005f;  // ~0.5% per frame toward identity
+        orient.w += decay * (1.0f - orient.w);
+        orient.x += decay * (0.0f - orient.x);
+        orient.y += decay * (0.0f - orient.y);
+        orient.z += decay * (0.0f - orient.z);
         qnorm(orient);
     }
 
