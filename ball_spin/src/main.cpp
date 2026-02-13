@@ -2,7 +2,7 @@
  * Tennis Ball Spin Visualizer - M5Stack ATOM S3
  *
  * Renders a 3D tennis ball that rotates in real-time based on
- * gyroscope data. Shows the seam curve, spin axis, and RPM.
+ * gyroscope data. Shows seam curve, spin axis, and RPM.
  * Uses quaternion integration for drift-free 3D orientation.
  *
  * Screen: 128x128 GC9107 IPS
@@ -99,7 +99,7 @@ static void drawSeam() {
         int16_t sx1 = CX + (int16_t)(p1.x * BALL_R);
         int16_t sy1 = CY - (int16_t)(p1.y * BALL_R);
         int16_t sx2 = CX + (int16_t)(p2.x * BALL_R);
-        int16_t sy2 = CY - (int16_t)(p2.y * BALL_R);
+        int16_t sy2 = CY + (int16_t)(p2.y * BALL_R);
 
         if (p1.z > 0.05f && p2.z > 0.05f) {
             // Front face: bright white seam
@@ -117,7 +117,7 @@ static void drawSpinAxis() {
     float mag = sqrtf(filtGx * filtGx + filtGy * filtGy + filtGz * filtGz);
     if (mag < 1.0f) return;
 
-    // Spin axis in body frame → rotate to world frame
+    // Spin axis in body frame -> rotate to world frame
     Vec3 bodyAxis = {filtGx / mag, filtGy / mag, filtGz / mag};
     Vec3 worldAxis = qrot(orient, bodyAxis);
 
@@ -135,6 +135,10 @@ void setup() {
     auto cfg = M5.config();
     cfg.serial_baudrate = 115200;
     M5.begin(cfg);
+
+    Serial.println("\n========================================");
+    Serial.println("Ball Spin Visualizer");
+    Serial.println("========================================\n");
 
     if (!M5.Imu.isEnabled()) {
         M5.Display.fillScreen(TFT_RED);
@@ -159,6 +163,8 @@ void setup() {
     }
 
     lastUs = micros();
+
+    Serial.println("Setup complete!\n");
 }
 
 void loop() {
@@ -167,6 +173,7 @@ void loop() {
     // Reset orientation
     if (M5.BtnA.wasPressed()) {
         orient = {1, 0, 0, 0};
+        Serial.println("Orientation reset");
     }
 
     // Read IMU
@@ -180,7 +187,7 @@ void loop() {
     if (dt > 0.1f) dt = 0.033f;  // clamp on overflow / first frame
     lastUs = nowUs;
 
-    // Gyro → rad/s (raw, for quaternion integration)
+    // Gyro -> rad/s (raw, for quaternion integration)
     float gx = d.gyro.x * (M_PI / 180.0f);
     float gy = d.gyro.y * (M_PI / 180.0f);
     float gz = d.gyro.z * (M_PI / 180.0f);
@@ -258,7 +265,7 @@ void loop() {
         const char *label = "SPIN";
         if (ax > ay && ax > az)      label = "TOPSPIN";
         else if (ay > ax && ay > az) label = "SIDESPIN";
-        else                         label = "GYRO";
+        else                         label = "SLICE";
 
         canvas.setTextColor(COL_TEXT);
         canvas.setTextDatum(bottom_right);
